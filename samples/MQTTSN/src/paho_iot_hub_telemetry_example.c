@@ -11,7 +11,7 @@
 
 #define AZURE_SN_GATEWAY "127.0.0.1"
 #define AZURE_SN_UNICAST_PORT 10000
-#define AZURE_IOT_HUB_DEVICE_ID ""
+#define AZURE_IOT_HUB_DEVICE_ID "<your_device_id>"
 #define AZURE_TELEMETRY_TOPIC "devices/" AZURE_IOT_HUB_DEVICE_ID "/messages/events/"
 
 unsigned char user_buffer[200];
@@ -181,7 +181,7 @@ int main()
 					attemptConnect(&g_iothub_client); // if we have lost the connection
 				count = 0;
 			}
-			//sleep(1);
+			sleep(1);
 		}
 	}
 }
