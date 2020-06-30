@@ -101,10 +101,10 @@ export AZ_IOT_DEVICE_ID=<your device ID>
 export AZ_IOT_HUB_HOSTNAME=<your hub name>.azure-devices.net
 ```
 
-Run sample
+Can connect to the default host address and port number specified in the sample or can optionally specify a different address and port:
 
 ```
 cd <path to your local repo>/azure-iot-udp-samples/samples/MQTTSN/client_build
 
-./azure-iot-udp-samples
+./azure-iot-udp-samples [host address] [destination port]
 ```
