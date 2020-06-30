@@ -17,6 +17,9 @@
 // DO NOT MODIFY: IoT Hub Hostname Environment Variable Name
 #define ENV_IOT_HUB_HOSTNAME "AZ_IOT_HUB_HOSTNAME"
 
+#define TELEMETRY_SEND_INTERVAL 1
+#define NUMBER_OF_MESSAGES 5
+
 char topicname[128];
 static char device_id[64];
 static char iot_hub_hostname[128];
@@ -93,6 +96,7 @@ static az_result read_configuration_and_init_client()
   return AZ_OK;
 }
 
+// This sample implements QoS 0
 int main(int argc, char** argv)
 {
 	int rc = 0;
@@ -106,24 +110,25 @@ int main(int argc, char** argv)
 	
 	// Default
 	char *host = "127.0.0.1";
-	int port = 10000; // unicast port if sending a unicast packet
+	int port = 10000; // use unicast port if sending a unicast packet
 
 	MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
 	unsigned short topicid;	
 
+	// Create a unicast UDP socket
 	mysock = transport_open();
 	if(mysock < 0)
 		return mysock;
 
+	// Read for optional destination address and port
 	if (argc > 1)
 		host = argv[1];
 
 	if (argc > 2)
 		port = atoi(argv[2]);
 
-	printf("Sending to hostname %s port %d\n", host, port);
+	printf("Connecting to hostname %s port %d\n", host, port);
 
-	// Init IoT Hub client 
 	// Read in the necessary environment variables and initialize the az_iot_hub_client
 	if (az_failed(rc = read_configuration_and_init_client()))
 	{
@@ -159,20 +164,20 @@ int main(int argc, char** argv)
 
 		if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
 		{
-			printf("Unable to connect, return code %d\n", connack_rc);
+			printf("Failed to receive Connect ACK packet, return code %d\nExiting...\n", connack_rc);
 			goto exit;
 		}
 		else 
-			printf("connected rc %d\n", connack_rc);
+			printf("CONNACK rc %d\n", connack_rc);
 	}
 	else
 	{
-		printf("could not connect to gateway\n");
+		printf("Failed to connect to the Gateway\nExiting...\n");
 		goto exit;
 	}
 
 	// Register topic name with the MQTTSN Gateway
-	printf("Registering\n");
+	printf("Registering topic %s\n", topicname);
 	int packetid = 1;
 	topicstr.cstring = topicname;
 	topicstr.lenstring.len = strlen(topicname);
@@ -194,42 +199,49 @@ int main(int argc, char** argv)
 		rc = MQTTSNDeserialize_regack(&topicid, &submsgid, &returncode, buf, buflen);
 		if (returncode != 0)
 		{
-			printf("return code %d\n", returncode);
+			printf("Failed to receive Register ACK packet, return code %d\nExiting...\n", returncode); // TODO
 			goto exit;
 		}
 		else
-			printf("regack topic id %d\n", topicid);
+			printf("REGACK topic id %d\n", topicid);
 	}
 	else
-		goto exit;
-
+	{
+		printf("Failed to register topic with the Gateway\nExiting...\n"); // TODO
+		goto exit;	
+	}
+		
 	// Publish 5 messages
-	for (int i = 0; i < 5; i++)
+	for (int i = 0; i < NUMBER_OF_MESSAGES; ++i)
     {          
-		printf("Publishing\n");
+		printf("Sending Message %d\n", i + 1);
 		topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
 		topic.data.id = topicid;
 
+		// Build payload
 		unsigned char payload[250];
 		int payloadlen = sprintf((char*)payload,
 	"{\"d\":{\"myName\":\"IoT mbed\",\"accelX\":%0.4f,\"accelY\":%0.4f,\"accelZ\":%0.4f,\"temp\":%0.4f}}",
 		(rand() % 10) * 2.0, (rand() % 10) * 2.0, (rand() % 10) * 2.0, (rand() % 10) + 18.0); 
+
+		// Publish
 		len = MQTTSNSerialize_publish(buf, buflen, 0, 0, retained, 0, topic, payload, payloadlen);
 
 		if (az_failed(
 			rc = transport_sendPacketBuffer(host, port, buf, len)))
 		{
-			printf("Failed to send Publish packet to the Gateway, return code %d\n", rc);
+			printf("Failed to publish telemetry message %d, return code %d\n", i + 1, rc);
 			return rc;
 		}
 
-		printf("rc %d from send packet for publish length %d\n", rc, len);
+		printf("Published rc %d for publish length %d\n", rc, len);
 
 		// [BUG] doesnt work?
-		// sleep_seconds(1); // Publish a message every second
+		sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
 	}
 
 	// Disconnect the client
+	printf("Disconnecting\n");
 	len = MQTTSNSerialize_disconnect(buf, buflen, 0);
 
 	if (az_failed(
@@ -238,6 +250,8 @@ int main(int argc, char** argv)
 		printf("Failed to send Disconnect packet to the Gateway, return code %d\n", rc);
 		return rc;
 	}
+
+	printf("Disconnected.\n");
 
 exit:
 	transport_close();
