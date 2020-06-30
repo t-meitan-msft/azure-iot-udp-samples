@@ -16,7 +16,7 @@ cd client_build
 
 cmake ..
 
-cmake --build .
+cmake --build . (or make)
 ```
 ---
 
@@ -76,16 +76,16 @@ cd <path to your gateway build folder>
 ./MQTT-SNGateway -f gateway.conf
 ```
 
-<!-- ## Monitoring the packets on Azure IoT Hub (optional)
+## Monitoring the packets on Azure IoT Hub (optional)
 
 * Open [Azure IoT Explorer](https://github.com/Azure/azure-iot-explorer/releases)
 * Connect to the Hub and go to Telemetry 
-* Start listening to events -->
+* Start listening to events
 
-<!-- ## Run the Sample
+## Run the Sample
 
 ```
 cd <path to your local repo>/azure-iot-udp-samples/samples/MQTTSN/client_build
 
 ./azure-iot-udp-samples
-``` -->
+```
