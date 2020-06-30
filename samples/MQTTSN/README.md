@@ -47,11 +47,17 @@ For our purposes, we have modified the following parameters:
 
 #### In _gateway.conf_:
 
-* BrokerName = `<your hub name>`.azure-devices.net
-* ClientAuthentication = YES
-* ClientsList = `<path to your>`/clients.conf
-* RootCAfile = `<path to your /CAfile.crt certificate>`
-* RootCApath = `<path to your /certs/ folder>`
+```
+BrokerName = <your hub name>.azure-devices.net
+
+ClientAuthentication = YES
+
+ClientsList = <path to your>/clients.conf
+
+RootCAfile = <path to your /CAfile.crt certificate>
+
+RootCApath = <path to your /certs/ folder>
+```
 
 > Configure the following two parameters according to [the Azure IoT Hub MQTT Support guide](https://docs.microsoft.com/en-us/azure/iot-hub/iot-hub-mqtt-support).
 * LoginID
@@ -59,8 +65,11 @@ For our purposes, we have modified the following parameters:
 
 > If device is Self-signed or CA signed, use the following parameters:
 
-* CertsFile = `<path to your /device_cert.pem>`
-* PrivateKey = `<path to your /device_private_key.pem>`
+```
+CertsFile = <path to your /device_cert.pem>
+
+PrivateKey = <path to your /device_private_key.pem>
+```
 
 #### In _clients.conf_:
 
@@ -83,6 +92,16 @@ cd <path to your gateway build folder>
 * Start listening to events
 
 ## Run the Sample
+
+Set environment variables for the device
+
+```
+export AZ_IOT_DEVICE_ID=<your device ID>
+
+export AZ_IOT_HUB_HOSTNAME=<your hub name>.azure-devices.net
+```
+
+Run sample
 
 ```
 cd <path to your local repo>/azure-iot-udp-samples/samples/MQTTSN/client_build
