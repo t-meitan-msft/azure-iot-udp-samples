@@ -2,3 +2,6 @@
 config/
 client_build/
 gateway_build/
+
+
+.vscode
