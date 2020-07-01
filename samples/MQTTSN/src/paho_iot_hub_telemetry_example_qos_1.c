@@ -243,19 +243,22 @@ int main(int argc, char** argv)
 
 		printf("Published rc %d for publish length %d\n", rc, len);
 
-        /* wait for puback */
+        // Wait for PUBACK
         if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
         {
             unsigned short packet_id, topic_id;
             unsigned char returncode;
 
             if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1 || returncode != MQTTSN_RC_ACCEPTED)
-                printf("Unable to publish, return code %d\n", returncode);
+                printf("Failed to receive Publish ACK packet, return code %d\n", returncode);
             else 
-                printf("puback received, id %d\n", packet_id);
+                printf("PUBACK received, id %d\n", packet_id);
         }
         else
+        {
+            printf("Failed to Acknowledge Publish packet\nExiting...\n");
             goto exit;
+        }
 
 		// [BUG] doesnt work?
 		sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
