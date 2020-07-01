@@ -112,6 +112,8 @@ int main(int argc, char** argv)
 	MQTTSNString topicstr;
 	int len = 0;
 	int retained = 0;
+    int qos = 1;
+    short packetid = 1;
 	
 	// Default
 	char *host = "127.0.0.1";
@@ -152,7 +154,7 @@ int main(int argc, char** argv)
 		return rc;
 	}
 	
-	// Connect to MQTTSN Gateway
+	// CONNECT to MQTTSN Gateway
 	len = MQTTSNSerialize_connect(buf, buflen, &options);
 
 	if (az_failed(
@@ -162,7 +164,7 @@ int main(int argc, char** argv)
 		return rc;
 	}
 	
-	// Wait for connack from the MQTTSN Gateway
+	// Wait for CONNACK from the MQTTSN Gateway
 	if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_CONNACK)
 	{
 		int connack_rc = -1;
@@ -181,9 +183,9 @@ int main(int argc, char** argv)
 		goto exit;
 	}
 
-	// Register topic name with the MQTTSN Gateway
+	// REGISTER topic name with the MQTTSN Gateway
 	printf("Registering topic %s\n", topicname);
-	int packetid = 1;
+	// int packetid = 1;
 	topicstr.cstring = topicname;
 	topicstr.lenstring.len = strlen(topicname);
 	len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr);
@@ -195,7 +197,7 @@ int main(int argc, char** argv)
 		return rc;
 	}
 
-	// Wait for regack from the MQTTSN Gateway
+	// Wait for REGACK from the MQTTSN Gateway
 	if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_REGACK) 	
 	{
 		unsigned short submsgid;
@@ -229,8 +231,8 @@ int main(int argc, char** argv)
 	"{\"d\":{\"myName\":\"IoT mbed\",\"accelX\":%0.4f,\"accelY\":%0.4f,\"accelZ\":%0.4f,\"temp\":%0.4f}}",
 		(rand() % 10) * 2.0, (rand() % 10) * 2.0, (rand() % 10) * 2.0, (rand() % 10) + 18.0); 
 
-		// Publish
-		len = MQTTSNSerialize_publish(buf, buflen, 0, 0, retained, 0, topic, payload, payloadlen);
+		// PUBLISH
+		len = MQTTSNSerialize_publish(buf, buflen, 0, qos, retained, packetid + i, topic, payload, payloadlen);
 
 		if (az_failed(
 			rc = transport_sendPacketBuffer(host, port, buf, len)))
@@ -241,11 +243,25 @@ int main(int argc, char** argv)
 
 		printf("Published rc %d for publish length %d\n", rc, len);
 
+        /* wait for puback */
+        if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
+        {
+            unsigned short packet_id, topic_id;
+            unsigned char returncode;
+
+            if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1 || returncode != MQTTSN_RC_ACCEPTED)
+                printf("Unable to publish, return code %d\n", returncode);
+            else 
+                printf("puback received, id %d\n", packet_id);
+        }
+        else
+            goto exit;
+
 		// [BUG] doesnt work?
 		sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
 	}
 
-	// Disconnect the client
+	// DISCONNECT the client
 	printf("Disconnecting\n");
 	len = MQTTSNSerialize_disconnect(buf, buflen, 0);
 

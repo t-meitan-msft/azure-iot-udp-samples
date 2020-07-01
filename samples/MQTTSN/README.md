@@ -106,5 +106,9 @@ Can connect to the default host address and port number specified in the sample 
 ```
 cd <path to your local repo>/azure-iot-udp-samples/samples/MQTTSN/client_build
 
-./azure-iot-udp-samples [host address] [destination port]
+./sample_qos_0 [host address] [destination port]
+
+or
+
+./sample_qos_1 [host address] [destination port]
 ```
