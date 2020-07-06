@@ -20,7 +20,7 @@
 // DO NOT MODIFY: IoT Hub Hostname Environment Variable Name
 #define ENV_IOT_HUB_HOSTNAME "AZ_IOT_HUB_HOSTNAME"
 
-#define QOS 1 // or 1
+#define QOS 0 // or 1
 #define TELEMETRY_SEND_INTERVAL 1 // seconds
 #define NUMBER_OF_MESSAGES 5
 #define TELEMETRY_PAYLOAD \
