@@ -105,29 +105,25 @@ static az_result read_configuration_and_init_client()
   return AZ_OK;
 }
 
-int main(int argc, char** argv)
+static int exit()
 {
-  int rc = 0;
-  int udp_socket;
-  unsigned char buf[128];
-  int buflen = sizeof(buf);
-  MQTTSN_topicid topic;
-  MQTTSNString topicstr;
-  int len = 0;
-  int retained = 0;
-  short packetid = 1;
+  int rc;
+  if ((rc = transport_close()) != 0)
+  {
+    printf("Failed to close transport socket, return code %d\r\n", rc);
+    return rc;
+  }
+  return 0;
+}
 
-  // Read for optional destination address and port
-  char* host = argc > 1 ? argv[1] : default_gateway_address;
-  int port = argc > 2 ? atoi(argv[2]) : default_gateway_port;
-
-  MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
-  unsigned short topicid;
+static int initialize(int socket, char* host, int port)
+{
+  int rc;
 
   // Create a unicast UDP socket
-  udp_socket = transport_open();
-  if (udp_socket < 0)
-    return udp_socket;
+  socket = transport_open();
+  if (socket < 0)
+    return socket;
 
   printf("Connecting to host '%s', port '%d'\r\n", host, port);
 
@@ -138,8 +134,6 @@ int main(int argc, char** argv)
     return rc;
   }
 
-  options.clientID.cstring = device_id;
-
   // Get topic name that the IoT Hub is subscribed to
   if (az_failed(
           rc = az_iot_hub_client_telemetry_get_publish_topic(
@@ -149,7 +143,18 @@ int main(int argc, char** argv)
     return rc;
   }
 
+  return 0;
+}
+
+static int connect_device(unsigned char buf[], int buflen, char* host, int port)
+{
+  int rc;
+  int len;
+
   // CONNECT to MQTTSN Gateway
+  MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
+  options.clientID.cstring = device_id;
+
   len = MQTTSNSerialize_connect(buf, buflen, &options);
 
   if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
@@ -166,7 +171,11 @@ int main(int argc, char** argv)
     if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
     {
       printf("Failed to receive Connect ACK packet, return code %d\r\nExiting...\r\n", connack_rc);
-      goto exit;
+      if ((rc = exit()) != 0)
+      {
+        return rc;
+      }
+      return -1;
     }
     else
       printf("CONNACK rc %d\r\n", connack_rc);
@@ -174,8 +183,27 @@ int main(int argc, char** argv)
   else
   {
     printf("Failed to connect to the Gateway\r\nExiting...\r\n");
-    goto exit;
+    if ((rc = exit()) != 0)
+    {
+      return rc;
+    }
+    return -1;
   }
+
+  return 0;
+}
+
+static int register_topic(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    short packetid,
+    unsigned short topicid)
+{
+  int rc;
+  int len;
+  MQTTSNString topicstr;
 
   // REGISTER topic name with the MQTTSN Gateway
   printf("Registering topic %s\r\n", topicname);
@@ -199,7 +227,11 @@ int main(int argc, char** argv)
     if (returncode != 0)
     {
       printf("Failed to receive Register ACK packet, return code %d\r\nExiting...\r\n", returncode);
-      goto exit;
+      if ((rc = exit()) != 0)
+      {
+        return rc;
+      }
+      return -1;
     }
     else
       printf("REGACK topic id %d\r\n", topicid);
@@ -207,8 +239,28 @@ int main(int argc, char** argv)
   else
   {
     printf("Failed to register topic with the Gateway\r\nExiting...\r\n");
-    goto exit;
+    if ((rc = exit()) != 0)
+    {
+      return rc;
+    }
+    return -1;
   }
+
+  return 0;
+}
+
+static int send_telemetry(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    short packetid,
+    unsigned short topicid)
+{
+  int rc;
+  int len;
+  int retained = 0;
+  MQTTSN_topicid topic;
 
   // Publish 5 messages
   for (int i = 0; i < NUMBER_OF_MESSAGES; ++i)
@@ -254,12 +306,18 @@ int main(int argc, char** argv)
       else
       {
         printf("Failed to Acknowledge Publish packet\nExiting...\n");
-        goto exit;
+        exit();
       }
     }
-
     sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
   }
+  return 0;
+}
+
+static int disconnect_device(unsigned char buf[], int buflen, char* host, int port)
+{
+  int rc;
+  int len;
 
   // DISCONNECT the client
   printf("Disconnecting\r\n");
@@ -273,8 +331,51 @@ int main(int argc, char** argv)
 
   printf("Disconnected.\r\n");
 
-exit:
-  transport_close();
+  return 0;
+}
+
+int main(int argc, char** argv)
+{
+  int rc;
+  int udp_socket;
+  unsigned char buf[128];
+  int buflen = sizeof(buf);
+  short packetid = 1;
+  unsigned short topicid;
+
+  // Read for optional destination address and port
+  char* host = argc > 1 ? argv[1] : default_gateway_address;
+  int port = argc > 2 ? atoi(argv[2]) : default_gateway_port;
+
+  if ((rc = initialize(udp_socket, host, port)) != 0)
+  {
+    return rc;
+  }
+
+  if ((rc = connect_device(buf, buflen, host, port)) != 0)
+  {
+    return rc;
+  }
+
+  if ((rc = register_topic(buf, buflen, host, port, packetid, topicid)) != 0)
+  {
+    return rc;
+  }
+
+  if ((rc = send_telemetry(buf, buflen, host, port, packetid, topicid)) != 0)
+  {
+    return rc;
+  }
+
+  if ((rc = disconnect_device(buf, buflen, host, port)) != 0)
+  {
+    return rc;
+  }
+
+  if ((rc = exit()) != 0)
+  {
+    return rc;
+  }
 
   return 0;
 }
