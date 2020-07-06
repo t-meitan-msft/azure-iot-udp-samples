@@ -101,7 +101,7 @@ static az_result read_configuration_and_init_client()
   return AZ_OK;
 }
 
-// This sample implements QoS 0
+// This sample implements QoS 1
 int main(int argc, char** argv)
 {
 	int rc = 0;

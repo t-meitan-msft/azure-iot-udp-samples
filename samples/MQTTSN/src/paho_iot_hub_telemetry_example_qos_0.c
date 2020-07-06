@@ -1,20 +1,18 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-#define WARN printf
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
-
+#include <string.h>
 #ifdef _WIN32
-	#include <Windows.h>
+#include <Windows.h>
 #else
-	#include <unistd.h>
+#include <unistd.h>
 #endif
 
 #include "MQTTSNPacket.h"
-#include "transport.h"
 #include "azure/iot/az_iot_hub_client.h"
+#include "transport.h"
 
 // DO NOT MODIFY: Device ID Environment Variable Name
 #define ENV_DEVICE_ID "AZ_IOT_DEVICE_ID"
@@ -22,13 +20,19 @@
 // DO NOT MODIFY: IoT Hub Hostname Environment Variable Name
 #define ENV_IOT_HUB_HOSTNAME "AZ_IOT_HUB_HOSTNAME"
 
-#define TELEMETRY_SEND_INTERVAL 1
+#define QOS 0 // or 1
+#define TELEMETRY_SEND_INTERVAL 1 // seconds
 #define NUMBER_OF_MESSAGES 5
+#define TELEMETRY_PAYLOAD \
+  "{\"d\":{\"myName\":\"IoT mbed\",\"accelX\":12,\"accelY\":4,\"accelZ\":12,\"temp\":18}}"
 
-char topicname[128];
+static char topicname[128];
 static char device_id[64];
 static char iot_hub_hostname[128];
 static az_iot_hub_client client;
+
+const char* default_gateway_address = "127.0.0.1";
+const int default_gateway_port = 10000; // use unicast port if sending a unicast packet
 
 static void sleep_seconds(uint32_t seconds)
 {
@@ -53,7 +57,7 @@ static az_result read_configuration_entry(
 
   if (env != NULL)
   {
-    printf("%s\n", hide_value ? "***" : env);
+    printf("%s\r\n", hide_value ? "***" : env);
     az_span env_span = az_span_from_str(env);
     AZ_RETURN_IF_NOT_ENOUGH_SIZE(buffer, az_span_size(env_span));
     az_span_copy(buffer, env_span);
@@ -61,7 +65,7 @@ static az_result read_configuration_entry(
   }
   else if (default_value != NULL)
   {
-    printf("%s\n", default_value);
+    printf("%s\r\n", default_value);
     az_span default_span = az_span_from_str(default_value);
     AZ_RETURN_IF_NOT_ENOUGH_SIZE(buffer, az_span_size(default_span));
     az_span_copy(buffer, default_span);
@@ -69,7 +73,7 @@ static az_result read_configuration_entry(
   }
   else
   {
-    printf("(missing) Please set the %s environment variable.\n", env_name);
+    printf("(missing) Please set the %s environment variable.\r\n", env_name);
     return AZ_ERROR_ARG;
   }
 
@@ -104,162 +108,150 @@ static az_result read_configuration_and_init_client()
 // This sample implements QoS 0
 int main(int argc, char** argv)
 {
-	int rc = 0;
-	int mysock;
-	unsigned char buf[500];
-	int buflen = sizeof(buf);
-	MQTTSN_topicid topic;
-	MQTTSNString topicstr;
-	int len = 0;
-	int retained = 0;
-	
-	// Default
-	char *host = "127.0.0.1";
-	int port = 10000; // use unicast port if sending a unicast packet
+  int rc = 0;
+  int udp_socket;
+  unsigned char buf[500];
+  int buflen = sizeof(buf);
+  MQTTSN_topicid topic;
+  MQTTSNString topicstr;
+  int len = 0;
+  int retained = 0;
+  char* host = default_gateway_address;
+  int port = default_gateway_port;
 
-	MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
-	unsigned short topicid;	
+  MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
+  unsigned short topicid;
 
-	// Create a unicast UDP socket
-	mysock = transport_open();
-	if(mysock < 0)
-		return mysock;
+  // Create a unicast UDP socket
+  udp_socket = transport_open();
+  if (udp_socket < 0)
+    return udp_socket;
 
-	// Read for optional destination address and port
-	if (argc > 1)
-		host = argv[1];
+  // Read for optional destination address and port
+  if (argc > 1)
+    host = argv[1];
 
-	if (argc > 2)
-		port = atoi(argv[2]);
+  if (argc > 2)
+    port = atoi(argv[2]);
 
-	printf("Connecting to hostname %s port %d\n", host, port);
+  printf("Connecting to host '%s', port '%d'\r\n", host, port);
 
-	// Read in the necessary environment variables and initialize the az_iot_hub_client
-	if (az_failed(rc = read_configuration_and_init_client()))
-	{
-		printf("Failed to read configuration from environment variables, return code %d\n", rc);
-		return rc;
-	}
+  // Read in the necessary environment variables and initialize the az_iot_hub_client
+  if (az_failed(rc = read_configuration_and_init_client()))
+  {
+    printf("Failed to read configuration from environment variables, return code %d\r\n", rc);
+    return rc;
+  }
 
-	options.clientID.cstring = device_id;
+  options.clientID.cstring = device_id;
 
-	// Get topic name that the IoT Hub is subscribed to
-	if (az_failed(
-		rc = az_iot_hub_client_telemetry_get_publish_topic(
-			&client, NULL, topicname, sizeof(topicname), NULL)))
-	{
-		printf("Failed to get publish topic, return code %d\n", rc);
-		return rc;
-	}
-	
-	// CONNECT to MQTTSN Gateway
-	len = MQTTSNSerialize_connect(buf, buflen, &options);
+  // Get topic name that the IoT Hub is subscribed to
+  if (az_failed(
+          rc = az_iot_hub_client_telemetry_get_publish_topic(
+              &client, NULL, topicname, sizeof(topicname), NULL)))
+  {
+    printf("Failed to get publish topic, return code %d\r\n", rc);
+    return rc;
+  }
 
-	if (az_failed(
-		rc = transport_sendPacketBuffer(host, port, buf, len)))
-	{
-		printf("Failed to send Connect packet to the Gateway, return code %d\n", rc);
-		return rc;
-	}
-	
-	// Wait for CONNACK from the MQTTSN Gateway
-	if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_CONNACK)
-	{
-		int connack_rc = -1;
+  // CONNECT to MQTTSN Gateway
+  len = MQTTSNSerialize_connect(buf, buflen, &options);
 
-		if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
-		{
-			printf("Failed to receive Connect ACK packet, return code %d\nExiting...\n", connack_rc);
-			goto exit;
-		}
-		else 
-			printf("CONNACK rc %d\n", connack_rc);
-	}
-	else
-	{
-		printf("Failed to connect to the Gateway\nExiting...\n");
-		goto exit;
-	}
+  if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+  {
+    printf("Failed to send Connect packet to the Gateway, return code %d\r\n", rc);
+    return rc;
+  }
 
-	// REGISTER topic name with the MQTTSN Gateway
-	printf("Registering topic %s\n", topicname);
-	int packetid = 1;
-	topicstr.cstring = topicname;
-	topicstr.lenstring.len = strlen(topicname);
-	len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr);
-	
-	if (az_failed(
-		rc = transport_sendPacketBuffer(host, port, buf, len)))
-	{
-		printf("Failed to send Register packet to the Gateway, return code %d\n", rc);
-		return rc;
-	}
+  // Wait for CONNACK from the MQTTSN Gateway
+  if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_CONNACK)
+  {
+    int connack_rc = -1;
 
-	// Wait for REGACK from the MQTTSN Gateway
-	if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_REGACK) 	
-	{
-		unsigned short submsgid;
-		unsigned char returncode;
+    if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
+    {
+      printf("Failed to receive Connect ACK packet, return code %d\r\nExiting...\r\n", connack_rc);
+      goto exit;
+    }
+    else
+      printf("CONNACK rc %d\r\n", connack_rc);
+  }
+  else
+  {
+    printf("Failed to connect to the Gateway\r\nExiting...\r\n");
+    goto exit;
+  }
 
-		rc = MQTTSNDeserialize_regack(&topicid, &submsgid, &returncode, buf, buflen);
-		if (returncode != 0)
-		{
-			printf("Failed to receive Register ACK packet, return code %d\nExiting...\n", returncode); // TODO
-			goto exit;
-		}
-		else
-			printf("REGACK topic id %d\n", topicid);
-	}
-	else
-	{
-		printf("Failed to register topic with the Gateway\nExiting...\n"); // TODO
-		goto exit;	
-	}
-		
-	// Publish 5 messages
-	for (int i = 0; i < NUMBER_OF_MESSAGES; ++i)
-    {          
-		printf("Sending Message %d\n", i + 1);
-		topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
-		topic.data.id = topicid;
+  // REGISTER topic name with the MQTTSN Gateway
+  printf("Registering topic %s\r\n", topicname);
+  int packetid = 1;
+  topicstr.cstring = topicname;
+  topicstr.lenstring.len = strlen(topicname);
+  len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr);
 
-		// Build payload
-		unsigned char payload[250];
-		int payloadlen = sprintf((char*)payload,
-	"{\"d\":{\"myName\":\"IoT mbed\",\"accelX\":%0.4f,\"accelY\":%0.4f,\"accelZ\":%0.4f,\"temp\":%0.4f}}",
-		(rand() % 10) * 2.0, (rand() % 10) * 2.0, (rand() % 10) * 2.0, (rand() % 10) + 18.0); 
+  if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+  {
+    printf("Failed to send Register packet to the Gateway, return code %d\r\n", rc);
+    return rc;
+  }
 
-		// PUBLISH
-		len = MQTTSNSerialize_publish(buf, buflen, 0, 0, retained, 0, topic, payload, payloadlen);
+  // Wait for REGACK from the MQTTSN Gateway
+  if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_REGACK)
+  {
+    unsigned short submsgid;
+    unsigned char returncode;
 
-		if (az_failed(
-			rc = transport_sendPacketBuffer(host, port, buf, len)))
-		{
-			printf("Failed to publish telemetry message %d, return code %d\n", i + 1, rc);
-			return rc;
-		}
+    rc = MQTTSNDeserialize_regack(&topicid, &submsgid, &returncode, buf, buflen);
+    if (returncode != 0)
+    {
+      printf("Failed to receive Register ACK packet, return code %d\r\nExiting...\r\n", returncode);
+      goto exit;
+    }
+    else
+      printf("REGACK topic id %d\r\n", topicid);
+  }
+  else
+  {
+    printf("Failed to register topic with the Gateway\r\nExiting...\r\n");
+    goto exit;
+  }
 
-		printf("Published rc %d for publish length %d\n", rc, len);
+  // Publish 5 messages
+  for (int i = 0; i < NUMBER_OF_MESSAGES; ++i)
+  {
+    printf("Sending Message %d\r\n", i + 1);
+    topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
+    topic.data.id = topicid;
 
-		// [BUG] doesnt work?
-		sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
-	}
+    // PUBLISH
+    len = MQTTSNSerialize_publish(
+        buf, buflen, 0, 0, retained, 0, topic, TELEMETRY_PAYLOAD, sizeof(TELEMETRY_PAYLOAD));
 
-	// DISCONNECT the client
-	printf("Disconnecting\n");
-	len = MQTTSNSerialize_disconnect(buf, buflen, 0);
+    if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+    {
+      printf("Failed to publish telemetry message %d, return code %d\r\n", i + 1, rc);
+      return rc;
+    }
 
-	if (az_failed(
-		rc = transport_sendPacketBuffer(host, port, buf, len)))
-	{
-		printf("Failed to send Disconnect packet to the Gateway, return code %d\n", rc);
-		return rc;
-	}
+    printf("Published rc %d for publish length %d\r\n", rc, len);
 
-	printf("Disconnected.\n");
+    sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
+  }
+
+  // DISCONNECT the client
+  printf("Disconnecting\r\n");
+  len = MQTTSNSerialize_disconnect(buf, buflen, 0);
+
+  if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+  {
+    printf("Failed to send Disconnect packet to the Gateway, return code %d\r\n", rc);
+    return rc;
+  }
+
+  printf("Disconnected.\r\n");
 
 exit:
-	transport_close();
+  transport_close();
 
-	return 0;
+  return 0;
 }
