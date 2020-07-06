@@ -10,8 +10,8 @@
 #include <unistd.h>
 #endif
 
-#include "MQTTSNPacket.h"
 #include "azure/iot/az_iot_hub_client.h"
+#include "src/MQTTSNPacket.h"
 #include "transport.h"
 
 // DO NOT MODIFY: Device ID Environment Variable Name
@@ -31,7 +31,7 @@ static char device_id[64];
 static char iot_hub_hostname[128];
 static az_iot_hub_client client;
 
-const char* default_gateway_address = "127.0.0.1";
+char* const default_gateway_address = "127.0.0.1";
 const int default_gateway_port = 10000; // use unicast port if sending a unicast packet
 
 static void sleep_seconds(uint32_t seconds)
@@ -105,7 +105,6 @@ static az_result read_configuration_and_init_client()
   return AZ_OK;
 }
 
-// This sample implements QoS 0
 int main(int argc, char** argv)
 {
   int rc = 0;
@@ -116,8 +115,11 @@ int main(int argc, char** argv)
   MQTTSNString topicstr;
   int len = 0;
   int retained = 0;
-  char* host = default_gateway_address;
-  int port = default_gateway_port;
+  short packetid = 1;
+
+  // Read for optional destination address and port
+  char* host = argc > 1 ? argv[1] : default_gateway_address;
+  int port = argc > 2 ? atoi(argv[2]) : default_gateway_port;
 
   MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
   unsigned short topicid;
@@ -126,13 +128,6 @@ int main(int argc, char** argv)
   udp_socket = transport_open();
   if (udp_socket < 0)
     return udp_socket;
-
-  // Read for optional destination address and port
-  if (argc > 1)
-    host = argv[1];
-
-  if (argc > 2)
-    port = atoi(argv[2]);
 
   printf("Connecting to host '%s', port '%d'\r\n", host, port);
 
@@ -184,7 +179,6 @@ int main(int argc, char** argv)
 
   // REGISTER topic name with the MQTTSN Gateway
   printf("Registering topic %s\r\n", topicname);
-  int packetid = 1;
   topicstr.cstring = topicname;
   topicstr.lenstring.len = strlen(topicname);
   len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr);
@@ -225,7 +219,15 @@ int main(int argc, char** argv)
 
     // PUBLISH
     len = MQTTSNSerialize_publish(
-        buf, buflen, 0, 0, retained, 0, topic, TELEMETRY_PAYLOAD, sizeof(TELEMETRY_PAYLOAD));
+        buf,
+        buflen,
+        0,
+        QOS,
+        retained,
+        packetid + i,
+        topic,
+        TELEMETRY_PAYLOAD,
+        sizeof(TELEMETRY_PAYLOAD));
 
     if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
     {
@@ -234,6 +236,27 @@ int main(int argc, char** argv)
     }
 
     printf("Published rc %d for publish length %d\r\n", rc, len);
+
+    if (QOS == 1)
+    {
+      // Wait for PUBACK
+      if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
+      {
+        unsigned short packet_id, topic_id;
+        unsigned char returncode;
+
+        if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1
+            || returncode != MQTTSN_RC_ACCEPTED)
+          printf("Failed to receive Publish ACK packet, return code %d\n", returncode);
+        else
+          printf("PUBACK received, id %d\n", packet_id);
+      }
+      else
+      {
+        printf("Failed to Acknowledge Publish packet\nExiting...\n");
+        goto exit;
+      }
+    }
 
     sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
   }
