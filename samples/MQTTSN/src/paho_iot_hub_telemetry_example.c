@@ -20,7 +20,7 @@
 // DO NOT MODIFY: IoT Hub Hostname Environment Variable Name
 #define ENV_IOT_HUB_HOSTNAME "AZ_IOT_HUB_HOSTNAME"
 
-#define QOS 0 // or 1
+#define CUSTOM_QOS 0 // if not defined, default qos is 1
 #define TELEMETRY_SEND_INTERVAL 1 // seconds
 #define NUMBER_OF_MESSAGES 5
 #define TELEMETRY_PAYLOAD \
@@ -105,7 +105,7 @@ static az_result read_configuration_and_init_client()
   return AZ_OK;
 }
 
-static int exit()
+static int exit_sample()
 {
   int rc;
   if ((rc = transport_close()) != 0)
@@ -171,7 +171,7 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
     if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
     {
       printf("Failed to receive Connect ACK packet, return code %d\r\nExiting...\r\n", connack_rc);
-      if ((rc = exit()) != 0)
+      if ((rc = exit_sample()) != 0)
       {
         return rc;
       }
@@ -183,7 +183,7 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
   else
   {
     printf("Failed to connect to the Gateway\r\nExiting...\r\n");
-    if ((rc = exit()) != 0)
+    if ((rc = exit_sample()) != 0)
     {
       return rc;
     }
@@ -227,7 +227,7 @@ static int register_topic(
     if (returncode != 0)
     {
       printf("Failed to receive Register ACK packet, return code %d\r\nExiting...\r\n", returncode);
-      if ((rc = exit()) != 0)
+      if ((rc = exit_sample()) != 0)
       {
         return rc;
       }
@@ -239,7 +239,7 @@ static int register_topic(
   else
   {
     printf("Failed to register topic with the Gateway\r\nExiting...\r\n");
-    if ((rc = exit()) != 0)
+    if ((rc = exit_sample()) != 0)
     {
       return rc;
     }
@@ -261,6 +261,13 @@ static int send_telemetry(
   int len;
   int retained = 0;
   MQTTSN_topicid topic;
+  int qos;
+
+#ifdef CUSTOM_QOS
+  qos = CUSTOM_QOS;
+#else
+  qos = 1;
+#endif
 
   // Publish 5 messages
   for (int i = 0; i < NUMBER_OF_MESSAGES; ++i)
@@ -274,7 +281,7 @@ static int send_telemetry(
         buf,
         buflen,
         0,
-        QOS,
+        qos,
         retained,
         packetid + i,
         topic,
@@ -289,26 +296,26 @@ static int send_telemetry(
 
     printf("Published rc %d for publish length %d\r\n", rc, len);
 
-    if (QOS == 1)
+#if !defined(CUSTOM_QOS) || (defined(CUSTOM_QOS) && CUSTOM_QOS == 1) // default to qos 1
+    // Wait for PUBACK
+    if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
     {
-      // Wait for PUBACK
-      if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
-      {
-        unsigned short packet_id, topic_id;
-        unsigned char returncode;
+      unsigned short packet_id, topic_id;
+      unsigned char returncode;
 
-        if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1
-            || returncode != MQTTSN_RC_ACCEPTED)
-          printf("Failed to receive Publish ACK packet, return code %d\n", returncode);
-        else
-          printf("PUBACK received, id %d\n", packet_id);
-      }
+      if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1
+          || returncode != MQTTSN_RC_ACCEPTED)
+        printf("Failed to receive Publish ACK packet, return code %d\n", returncode);
       else
-      {
-        printf("Failed to Acknowledge Publish packet\nExiting...\n");
-        exit();
-      }
+        printf("PUBACK received, id %d\n", packet_id);
     }
+    else
+    {
+      printf("Failed to Acknowledge Publish packet\nExiting...\n");
+      exit_sample();
+    }
+#endif
+
     sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
   }
   return 0;
@@ -372,7 +379,7 @@ int main(int argc, char** argv)
     return rc;
   }
 
-  if ((rc = exit()) != 0)
+  if ((rc = exit_sample()) != 0)
   {
     return rc;
   }
