@@ -8,7 +8,7 @@ PROJECT(azure-iot-udp-samples)
 add_subdirectory(${PROJECT_SOURCE_DIR}/lib/azure-sdk-for-c)
 add_subdirectory(${PROJECT_SOURCE_DIR}/lib/paho.mqtt-sn.embedded-c/MQTTSNPacket/src)
 
-add_executable(sample_telemetry ${PROJECT_SOURCE_DIR}/src/paho_iot_hub_telemetry_example_qos_0.c ${PROJECT_SOURCE_DIR}/src/transport.c)
+add_executable(sample_telemetry ${PROJECT_SOURCE_DIR}/src/paho_iot_hub_telemetry_example.c ${PROJECT_SOURCE_DIR}/src/transport.c)
 
 link_directories(${PROJECT_SOURCE_DIR}/lib)
 
