@@ -199,7 +199,7 @@ static int register_topic(
     char* host,
     int port,
     short packetid,
-    unsigned short topicid)
+    unsigned short* topicid)
 {
   int rc;
   int len;
@@ -223,7 +223,7 @@ static int register_topic(
     unsigned short submsgid;
     unsigned char returncode;
 
-    rc = MQTTSNDeserialize_regack(&topicid, &submsgid, &returncode, buf, buflen);
+    rc = MQTTSNDeserialize_regack(topicid, &submsgid, &returncode, buf, buflen);
     if (returncode != 0)
     {
       printf("Failed to receive Register ACK packet, return code %d\r\nExiting...\r\n", returncode);
@@ -234,7 +234,7 @@ static int register_topic(
       return -1;
     }
     else
-      printf("REGACK topic id %d\r\n", topicid);
+      printf("REGACK topic id %d\r\n", *topicid);
   }
   else
   {
@@ -255,7 +255,7 @@ static int send_telemetry(
     char* host,
     int port,
     short packetid,
-    unsigned short topicid)
+    unsigned short* topicid)
 {
   int rc;
   int len;
@@ -274,7 +274,7 @@ static int send_telemetry(
   {
     printf("Sending Message %d\r\n", i + 1);
     topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
-    topic.data.id = topicid;
+    topic.data.id = *topicid;
 
     // PUBLISH
     len = MQTTSNSerialize_publish(
@@ -364,12 +364,12 @@ int main(int argc, char** argv)
     return rc;
   }
 
-  if ((rc = register_topic(buf, buflen, host, port, packetid, topicid)) != 0)
+  if ((rc = register_topic(buf, buflen, host, port, packetid, &topicid)) != 0)
   {
     return rc;
   }
 
-  if ((rc = send_telemetry(buf, buflen, host, port, packetid, topicid)) != 0)
+  if ((rc = send_telemetry(buf, buflen, host, port, packetid, &topicid)) != 0)
   {
     return rc;
   }
