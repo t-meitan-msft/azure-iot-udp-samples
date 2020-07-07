@@ -20,8 +20,7 @@
 // DO NOT MODIFY: IoT Hub Hostname Environment Variable Name
 #define ENV_IOT_HUB_HOSTNAME "AZ_IOT_HUB_HOSTNAME"
 
-#define CONNECT_RETRIES 3
-#define MQTT_QOS 0 // if not defined, default qos is 1
+// #define MQTT_QOS 0 // if not defined, default qos is 1
 #define TELEMETRY_SEND_INTERVAL 1 // seconds
 #define NUMBER_OF_MESSAGES 5
 #define TELEMETRY_PAYLOAD \
@@ -148,12 +147,17 @@ static int initialize(int socket, char* host, int port)
 }
 
 int getConnTimeout(int attemptNumber)
-{  // First 10 attempts try within 3 seconds, next 10 attempts retry after every 1 minute
-   // after 20 attempts, retry every 10 minutes
-    return (attemptNumber < 10) ? 3 : (attemptNumber < 20) ? 60 : 600;
+{ // First 10 attempts try within 3 seconds, next 10 attempts retry after every 1 minute
+  // after 20 attempts, retry every 10 minutes
+  return (attemptNumber < 10) ? 3 : (attemptNumber < 20) ? 60 : 600;
 }
 
-static int connect(unsigned char buf[], int buflen, char* host, int port, MQTTSNPacket_connectData options)
+static int connect(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    MQTTSNPacket_connectData options)
 {
   int rc;
   int len;
@@ -174,7 +178,12 @@ static int connect(unsigned char buf[], int buflen, char* host, int port, MQTTSN
   return 0;
 }
 
-static int receive_connack(unsigned char buf[], int buflen, char* host, int port, MQTTSNPacket_connectData options)
+static int receive_connack(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    MQTTSNPacket_connectData options)
 {
   int rc;
 
@@ -183,8 +192,7 @@ static int receive_connack(unsigned char buf[], int buflen, char* host, int port
   {
     if (MQTTSNDeserialize_connack(&rc, buf, buflen) != 1 || rc != 0)
     {
-      printf(
-          "Failed to receive Connect ACK packet, return code %d\r\n", rc);
+      printf("Failed to receive Connect ACK packet, return code %d\r\n", rc);
     }
     else
     {
@@ -201,7 +209,12 @@ static int receive_connack(unsigned char buf[], int buflen, char* host, int port
   return 0;
 }
 
-static int attempt_connect(unsigned char buf[], int buflen, char* host, int port, MQTTSNPacket_connectData options)
+static int attempt_connect(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    MQTTSNPacket_connectData options)
 {
   int rc;
   int len;
@@ -228,7 +241,7 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
   MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
   options.clientID.cstring = device_id;
 
-  while(attempt_connect(buf, buflen, host, port, options) != 0)
+  while (attempt_connect(buf, buflen, host, port, options) != 0)
   {
     static int retryAttempt = 0;
 
@@ -241,17 +254,11 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
   return 0;
 }
 
-static int register_topic(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    short packetid,
-    unsigned short* topicid)
+static int
+reg(unsigned char buf[], int buflen, char* host, int port, MQTTSNString topicstr, short packetid)
 {
   int rc;
   int len;
-  MQTTSNString topicstr;
 
   // REGISTER topic name with the MQTTSN Gateway
   printf("Registering topic %s\r\n", topicname);
@@ -270,6 +277,20 @@ static int register_topic(
     return rc;
   }
 
+  return 0;
+}
+
+static int receive_regack(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    MQTTSNString topicstr,
+    unsigned short* topicid)
+{
+  int rc;
+  int len;
+
   // Wait for REGACK from the MQTTSN Gateway
   if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_REGACK)
   {
@@ -279,24 +300,69 @@ static int register_topic(
     rc = MQTTSNDeserialize_regack(topicid, &submsgid, &returncode, buf, buflen);
     if (returncode != 0)
     {
-      printf("Failed to receive Register ACK packet, return code %d\r\nExiting...\r\n", returncode);
-      if ((rc = exit_sample()) != 0)
-      {
-        return rc;
-      }
-      return -1;
+      printf("Failed to receive Register ACK packet, return code %d\r\n", returncode);
     }
     else
-      printf("REGACK topic id %d\r\n", *topicid);
+    {
+      printf("REGACK with topic id %d, retrun code %d\r\n", *topicid, rc);
+    }
+    return rc;
   }
   else
   {
-    printf("Failed to register topic with the Gateway\r\nExiting...\r\n");
-    if ((rc = exit_sample()) != 0)
-    {
-      return rc;
-    }
+    printf("Failed to register topic with the Gateway\r\n");
     return -1;
+  }
+
+  return 0;
+}
+
+static int attempt_register(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    MQTTSNString topicstr,
+    short packetid,
+    unsigned short* topicid)
+{
+  int rc;
+  int len;
+
+  if ((rc = reg(buf, buflen, host, port, topicstr, packetid)) != 0)
+  {
+    return rc;
+  }
+
+  if ((rc = receive_regack(buf, buflen, host, port, topicstr, topicid)) != 0)
+  {
+    printf("Retrying...\r\n");
+    return rc;
+  }
+
+  return 0;
+}
+
+static int register_topic(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    short packetid,
+    unsigned short* topicid)
+{
+  int rc;
+  int len;
+  MQTTSNString topicstr;
+
+  while (attempt_register(buf, buflen, host, port, topicstr, packetid, topicid) != 0)
+  {
+    static int retryAttempt = 0;
+
+    int timeout = getConnTimeout(++retryAttempt);
+    printf("Retry attempt number %d waiting %d\n", retryAttempt, timeout);
+
+    sleep(timeout);
   }
 
   return 0;
@@ -363,14 +429,14 @@ static int send_telemetry(
 
       if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1
           || returncode != MQTTSN_RC_ACCEPTED)
-        printf("Failed to receive Publish ACK packet, return code %d\n", returncode);
+        printf("Failed to receive Publish ACK packet, return code %d\r\n", returncode);
       else
-        printf("PUBACK received, id %d\n", packet_id);
+        printf("PUBACK received, id %d\r\n", packet_id);
     }
     else
     {
-      printf("Failed to Acknowledge Publish packet\nExiting...\n");
-      exit_sample();
+      printf("Failed to Acknowledge Publish packet\r\nExiting...\r\n");
+      exit_sample(); // TODO
     }
 #endif
 
