@@ -155,7 +155,11 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
   MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
   options.clientID.cstring = device_id;
 
-  len = MQTTSNSerialize_connect(buf, buflen, &options);
+  if ((len = MQTTSNSerialize_connect(buf, buflen, &options)) == 0)
+  {
+    printf("Failed to serialize Connect packet, return code %d\r\n", rc);
+    return rc;
+  }
 
   if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
   {
@@ -209,7 +213,12 @@ static int register_topic(
   printf("Registering topic %s\r\n", topicname);
   topicstr.cstring = topicname;
   topicstr.lenstring.len = strlen(topicname);
-  len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr);
+
+  if ((len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr)) == 0)
+  {
+    printf("Failed to serialize Register packet, return code %d\r\n", rc);
+    return rc;
+  }
 
   if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
   {
@@ -277,16 +286,21 @@ static int send_telemetry(
     topic.data.id = *topicid;
 
     // PUBLISH
-    len = MQTTSNSerialize_publish(
-        buf,
-        buflen,
-        0,
-        qos,
-        retained,
-        packetid + i,
-        topic,
-        TELEMETRY_PAYLOAD,
-        sizeof(TELEMETRY_PAYLOAD));
+    if ((len = MQTTSNSerialize_publish(
+             buf,
+             buflen,
+             0,
+             qos,
+             retained,
+             packetid + i,
+             topic,
+             TELEMETRY_PAYLOAD,
+             sizeof(TELEMETRY_PAYLOAD)))
+        == 0)
+    {
+      printf("Failed to serialize Publish packet, return code %d\r\n", rc);
+      return rc;
+    }
 
     if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
     {
@@ -328,7 +342,12 @@ static int disconnect_device(unsigned char buf[], int buflen, char* host, int po
 
   // DISCONNECT the client
   printf("Disconnecting\r\n");
-  len = MQTTSNSerialize_disconnect(buf, buflen, 0);
+
+  if ((len = MQTTSNSerialize_disconnect(buf, buflen, 0)) == 0)
+  {
+    printf("Failed to serialize Disconnect packet, return code %d\r\n", rc);
+    return rc;
+  }
 
   if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
   {
