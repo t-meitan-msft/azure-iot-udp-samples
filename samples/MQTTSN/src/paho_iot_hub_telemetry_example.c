@@ -20,6 +20,7 @@
 // DO NOT MODIFY: IoT Hub Hostname Environment Variable Name
 #define ENV_IOT_HUB_HOSTNAME "AZ_IOT_HUB_HOSTNAME"
 
+#define CONNECT_RETRIES 3
 #define CUSTOM_QOS 0 // if not defined, default qos is 1
 #define TELEMETRY_SEND_INTERVAL 1 // seconds
 #define NUMBER_OF_MESSAGES 5
@@ -151,10 +152,60 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
   int rc;
   int len;
 
-  // CONNECT to MQTTSN Gateway
   MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
   options.clientID.cstring = device_id;
 
+#ifdef CONNECT_RETRIES
+  for (int i = 0; i <= CONNECT_RETRIES; i++)
+  {
+    // If exceeding number of retries
+    if (i == CONNECT_RETRIES)
+    {
+      printf("Failed to connect to the Gateway\r\nExiting...\r\n");
+      if ((rc = exit_sample()) != 0)
+      {
+        return rc;
+      }
+      return -1;
+    }
+
+    // CONNECT to MQTTSN Gateway
+    if ((len = MQTTSNSerialize_connect(buf, buflen, &options)) == 0)
+    {
+      printf("Failed to serialize Connect packet, return code %d\r\n", rc);
+      return rc;
+    }
+
+    if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+    {
+      printf("Failed to send Connect packet to the Gateway, return code %d\r\n", rc);
+      return rc;
+    }
+
+    // Wait for CONNACK from the MQTTSN Gateway
+    if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_CONNACK)
+    {
+      int connack_rc = -1;
+
+      if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
+      {
+        printf(
+            "Failed to receive Connect ACK packet, return code %d\r\nRetrying...\r\n", connack_rc);
+      }
+      else
+      {
+        printf("CONNACK rc %d\r\n", connack_rc);
+        break;
+      }
+    }
+    else
+    {
+      printf("Failed to receive Connect ACK packet\r\nRetrying...\r\n");
+    }
+  }
+
+#else
+  // CONNECT to MQTTSN Gateway
   if ((len = MQTTSNSerialize_connect(buf, buflen, &options)) == 0)
   {
     printf("Failed to serialize Connect packet, return code %d\r\n", rc);
@@ -193,6 +244,7 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
     }
     return -1;
   }
+#endif
 
   return 0;
 }
