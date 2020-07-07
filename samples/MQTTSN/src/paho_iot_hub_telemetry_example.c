@@ -21,7 +21,7 @@
 #define ENV_IOT_HUB_HOSTNAME "AZ_IOT_HUB_HOSTNAME"
 
 #define CONNECT_RETRIES 3
-#define CUSTOM_QOS 0 // if not defined, default qos is 1
+#define MQTT_QOS 0 // if not defined, default qos is 1
 #define TELEMETRY_SEND_INTERVAL 1 // seconds
 #define NUMBER_OF_MESSAGES 5
 #define TELEMETRY_PAYLOAD \
@@ -147,69 +147,22 @@ static int initialize(int socket, char* host, int port)
   return 0;
 }
 
-static int connect_device(unsigned char buf[], int buflen, char* host, int port)
+int getConnTimeout(int attemptNumber)
+{  // First 10 attempts try within 3 seconds, next 10 attempts retry after every 1 minute
+   // after 20 attempts, retry every 10 minutes
+    return (attemptNumber < 10) ? 3 : (attemptNumber < 20) ? 60 : 600;
+}
+
+static int connect(unsigned char buf[], int buflen, char* host, int port, MQTTSNPacket_connectData options)
 {
   int rc;
   int len;
 
-  MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
-  options.clientID.cstring = device_id;
-
-#ifdef CONNECT_RETRIES
-  for (int i = 0; i <= CONNECT_RETRIES; i++)
-  {
-    // If exceeding number of retries
-    if (i == CONNECT_RETRIES)
-    {
-      printf("Failed to connect to the Gateway\r\nExiting...\r\n");
-      if ((rc = exit_sample()) != 0)
-      {
-        return rc;
-      }
-      return -1;
-    }
-
-    // CONNECT to MQTTSN Gateway
-    if ((len = MQTTSNSerialize_connect(buf, buflen, &options)) == 0)
-    {
-      printf("Failed to serialize Connect packet, return code %d\r\n", rc);
-      return rc;
-    }
-
-    if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
-    {
-      printf("Failed to send Connect packet to the Gateway, return code %d\r\n", rc);
-      return rc;
-    }
-
-    // Wait for CONNACK from the MQTTSN Gateway
-    if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_CONNACK)
-    {
-      int connack_rc = -1;
-
-      if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
-      {
-        printf(
-            "Failed to receive Connect ACK packet, return code %d\r\nRetrying...\r\n", connack_rc);
-      }
-      else
-      {
-        printf("CONNACK rc %d\r\n", connack_rc);
-        break;
-      }
-    }
-    else
-    {
-      printf("Failed to receive Connect ACK packet\r\nRetrying...\r\n");
-    }
-  }
-
-#else
   // CONNECT to MQTTSN Gateway
   if ((len = MQTTSNSerialize_connect(buf, buflen, &options)) == 0)
   {
-    printf("Failed to serialize Connect packet, return code %d\r\n", rc);
-    return rc;
+    printf("Failed to serialize Connect packet, return code %d\r\n", len);
+    return len;
   }
 
   if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
@@ -218,33 +171,72 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
     return rc;
   }
 
+  return 0;
+}
+
+static int receive_connack(unsigned char buf[], int buflen, char* host, int port, MQTTSNPacket_connectData options)
+{
+  int rc;
+
   // Wait for CONNACK from the MQTTSN Gateway
   if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_CONNACK)
   {
-    int connack_rc = -1;
-
-    if (MQTTSNDeserialize_connack(&connack_rc, buf, buflen) != 1 || connack_rc != 0)
+    if (MQTTSNDeserialize_connack(&rc, buf, buflen) != 1 || rc != 0)
     {
-      printf("Failed to receive Connect ACK packet, return code %d\r\nExiting...\r\n", connack_rc);
-      if ((rc = exit_sample()) != 0)
-      {
-        return rc;
-      }
-      return -1;
+      printf(
+          "Failed to receive Connect ACK packet, return code %d\r\n", rc);
     }
     else
-      printf("CONNACK rc %d\r\n", connack_rc);
+    {
+      printf("CONNACK rc %d\r\n", rc);
+    }
+    return rc;
   }
   else
   {
-    printf("Failed to connect to the Gateway\r\nExiting...\r\n");
-    if ((rc = exit_sample()) != 0)
-    {
-      return rc;
-    }
+    printf("Failed to receive Connect ACK packet\r\n");
     return -1;
   }
-#endif
+
+  return 0;
+}
+
+static int attempt_connect(unsigned char buf[], int buflen, char* host, int port, MQTTSNPacket_connectData options)
+{
+  int rc;
+  int len;
+
+  if ((rc = connect(buf, buflen, host, port, options)) != 0)
+  {
+    return rc;
+  }
+
+  if ((rc = receive_connack(buf, buflen, host, port, options)) != 0)
+  {
+    printf("Retrying...\r\n");
+    return rc;
+  }
+
+  return 0;
+}
+
+static int connect_device(unsigned char buf[], int buflen, char* host, int port)
+{
+  int rc;
+  int len;
+
+  MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
+  options.clientID.cstring = device_id;
+
+  while(attempt_connect(buf, buflen, host, port, options) != 0)
+  {
+    static int retryAttempt = 0;
+
+    int timeout = getConnTimeout(++retryAttempt);
+    printf("Retry attempt number %d waiting %d\n", retryAttempt, timeout);
+
+    sleep(timeout);
+  }
 
   return 0;
 }
@@ -268,8 +260,8 @@ static int register_topic(
 
   if ((len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr)) == 0)
   {
-    printf("Failed to serialize Register packet, return code %d\r\n", rc);
-    return rc;
+    printf("Failed to serialize Register packet, return code %d\r\n", len);
+    return len;
   }
 
   if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
@@ -324,8 +316,8 @@ static int send_telemetry(
   MQTTSN_topicid topic;
   int qos;
 
-#ifdef CUSTOM_QOS
-  qos = CUSTOM_QOS;
+#ifdef MQTT_QOS
+  qos = MQTT_QOS;
 #else
   qos = 1;
 #endif
@@ -350,8 +342,8 @@ static int send_telemetry(
              sizeof(TELEMETRY_PAYLOAD)))
         == 0)
     {
-      printf("Failed to serialize Publish packet, return code %d\r\n", rc);
-      return rc;
+      printf("Failed to serialize Publish packet, return code %d\r\n", len);
+      return len;
     }
 
     if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
@@ -362,7 +354,7 @@ static int send_telemetry(
 
     printf("Published rc %d for publish length %d\r\n", rc, len);
 
-#if !defined(CUSTOM_QOS) || (defined(CUSTOM_QOS) && CUSTOM_QOS == 1) // default to qos 1
+#if !defined(MQTT_QOS) || (defined(MQTT_QOS) && MQTT_QOS == 1) // default to qos 1
     // Wait for PUBACK
     if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
     {
@@ -397,8 +389,8 @@ static int disconnect_device(unsigned char buf[], int buflen, char* host, int po
 
   if ((len = MQTTSNSerialize_disconnect(buf, buflen, 0)) == 0)
   {
-    printf("Failed to serialize Disconnect packet, return code %d\r\n", rc);
-    return rc;
+    printf("Failed to serialize Disconnect packet, return code %d\r\n", len);
+    return len;
   }
 
   if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
