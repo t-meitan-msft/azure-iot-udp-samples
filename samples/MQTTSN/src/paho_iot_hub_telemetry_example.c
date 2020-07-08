@@ -10,8 +10,8 @@
 #include <unistd.h>
 #endif
 
+#include "MQTTSNPacket.h"
 #include "azure/iot/az_iot_hub_client.h"
-#include "src/MQTTSNPacket.h"
 #include "transport.h"
 
 // DO NOT MODIFY: Device ID Environment Variable Name
@@ -34,8 +34,10 @@
 #define TELEMETRY_PAYLOAD \
   "{\"d\":{\"myName\":\"IoT mbed\",\"accelX\":12,\"accelY\":4,\"accelZ\":12,\"temp\":18}}"
 
-#if !defined(MQTT_QOS) || (defined(MQTT_QOS) && MQTT_QOS == 1) // default to qos 1
-#define ENABLE_PUBACK true
+#ifdef AZ_TELEMETRY_QOS_0
+#undef ENABLE_PUBACK // default to qos 1 and enable puback if QoS 1
+#else
+#define ENABLE_PUBACK
 #endif
 
 static char topicname[128];
@@ -47,12 +49,12 @@ static char gateway_port[8];
 
 typedef struct iothub_client_context_tag
 {
-    char *host;
-    int port;
-    unsigned short telemetry_topic_id;
-    az_iot_hub_client client;
-    short packetid;
-} iothub_client_context; 
+  char* host;
+  int port;
+  unsigned short telemetry_topic_id;
+  az_iot_hub_client client;
+  short packetid;
+} iothub_client_context;
 
 static void sleep_seconds(uint32_t seconds)
 {
@@ -100,7 +102,10 @@ static az_result read_configuration_entry(
   return AZ_OK;
 }
 
-static az_result read_configuration_and_init_client(az_iot_hub_client* client, char** host, int* port)
+static az_result read_configuration_and_init_client(
+    az_iot_hub_client* client,
+    char** host,
+    int* port)
 {
   az_span device_id_span = AZ_SPAN_FROM_BUFFER(device_id);
   AZ_RETURN_IF_FAILED(read_configuration_entry(
@@ -141,20 +146,24 @@ static az_result read_configuration_and_init_client(az_iot_hub_client* client, c
       NULL));
 
   // Save gateway address to context
-  az_span_to_str(gateway_address, sizeof(gateway_address), az_span_slice(gateway_address_span, 0, (int32_t)strlen(gateway_address)));
+  az_span_to_str(
+      gateway_address,
+      sizeof(gateway_address),
+      az_span_slice(gateway_address_span, 0, (int32_t)strlen(gateway_address)));
   *host = gateway_address;
 
   // Save gateway port to context
-  AZ_RETURN_IF_FAILED(az_span_atou32(az_span_slice(gateway_port_span, 0, (int32_t)strlen(gateway_port)), port));
+  AZ_RETURN_IF_FAILED(
+      az_span_atou32(az_span_slice(gateway_port_span, 0, (int32_t)strlen(gateway_port)), port));
 
   return AZ_OK;
 }
 
-static int init(iothub_client_context *ctx)
+static int init_client_context(iothub_client_context* ctx)
 {
-  int rc; 
+  int rc;
   ctx->packetid = 0;
-  
+
   // Read in the necessary environment variables and initialize the az_iot_hub_client
   if (az_failed(rc = read_configuration_and_init_client(&ctx->client, &ctx->host, &ctx->port)))
   {
@@ -176,7 +185,7 @@ static int exit_sample()
   return 0;
 }
 
-static int initialize(iothub_client_context *ctx)
+static int init_transport_and_get_topicname(iothub_client_context* ctx)
 {
   int rc;
 
@@ -206,7 +215,7 @@ int get_connection_timeout(int attemptNumber)
   return (attemptNumber < 10) ? 3 : (attemptNumber < 20) ? 60 : 600;
 }
 
-static int send_connect(iothub_client_context *ctx, MQTTSNPacket_connectData* options)
+static int send_connect(iothub_client_context* ctx, MQTTSNPacket_connectData* options)
 {
   int rc;
   int len;
@@ -232,7 +241,8 @@ static int receive_connack()
   int rc;
 
   // Wait for CONNACK from the MQTTSN Gateway
-  if (MQTTSNPacket_read(scratch_buffer, sizeof(scratch_buffer), transport_getdata) == MQTTSN_CONNACK)
+  if (MQTTSNPacket_read(scratch_buffer, sizeof(scratch_buffer), transport_getdata)
+      == MQTTSN_CONNACK)
   {
     if (MQTTSNDeserialize_connack(&rc, scratch_buffer, sizeof(scratch_buffer)) != 1 || rc != 0)
     {
@@ -254,7 +264,7 @@ static int receive_connack()
   return 0;
 }
 
-static int attempt_connect(iothub_client_context *ctx, MQTTSNPacket_connectData* options)
+static int attempt_connect(iothub_client_context* ctx, MQTTSNPacket_connectData* options)
 {
   int rc;
   int len;
@@ -272,7 +282,7 @@ static int attempt_connect(iothub_client_context *ctx, MQTTSNPacket_connectData*
   return 0;
 }
 
-static int connect_device(iothub_client_context *ctx)
+static int connect_device(iothub_client_context* ctx)
 {
   int rc;
   int len;
@@ -293,7 +303,7 @@ static int connect_device(iothub_client_context *ctx)
   return 0;
 }
 
-static int send_register(iothub_client_context *ctx, MQTTSNString* topicstr)
+static int send_register(iothub_client_context* ctx, MQTTSNString* topicstr)
 {
   int rc;
   int len;
@@ -303,7 +313,9 @@ static int send_register(iothub_client_context *ctx, MQTTSNString* topicstr)
   topicstr->cstring = topicname;
   topicstr->lenstring.len = strlen(topicname);
 
-  if ((len = MQTTSNSerialize_register(scratch_buffer, sizeof(scratch_buffer), 0, ctx->packetid, topicstr)) == 0)
+  if ((len = MQTTSNSerialize_register(
+           scratch_buffer, sizeof(scratch_buffer), 0, ctx->packetid, topicstr))
+      == 0)
   {
     printf("Failed to serialize Register packet, return code %d\r\n", len);
     return len;
@@ -318,7 +330,7 @@ static int send_register(iothub_client_context *ctx, MQTTSNString* topicstr)
   return 0;
 }
 
-static int receive_regack(iothub_client_context *ctx)
+static int receive_regack(iothub_client_context* ctx)
 {
   int len;
 
@@ -328,7 +340,13 @@ static int receive_regack(iothub_client_context *ctx)
     unsigned short submsgid;
     unsigned char returncode;
 
-    if (MQTTSNDeserialize_regack(&ctx->telemetry_topic_id, &submsgid, &returncode, scratch_buffer, sizeof(scratch_buffer)) != 1
+    if (MQTTSNDeserialize_regack(
+            &ctx->telemetry_topic_id,
+            &submsgid,
+            &returncode,
+            scratch_buffer,
+            sizeof(scratch_buffer))
+            != 1
         || returncode != 0)
     {
       printf("Failed to receive Register ACK packet, return code %d\r\n", returncode);
@@ -348,7 +366,7 @@ static int receive_regack(iothub_client_context *ctx)
   return 0;
 }
 
-static int attempt_register(iothub_client_context *ctx, MQTTSNString* topicstr)
+static int attempt_register(iothub_client_context* ctx, MQTTSNString* topicstr)
 {
   int rc;
   int len;
@@ -366,7 +384,7 @@ static int attempt_register(iothub_client_context *ctx, MQTTSNString* topicstr)
   return 0;
 }
 
-static int register_topic(iothub_client_context *ctx)
+static int register_topic(iothub_client_context* ctx)
 {
   int rc;
   int len;
@@ -385,7 +403,7 @@ static int register_topic(iothub_client_context *ctx)
   return 0;
 }
 
-static int send_publish(iothub_client_context *ctx)
+static int send_publish(iothub_client_context* ctx)
 {
   int rc;
   int len;
@@ -422,7 +440,9 @@ static int send_publish(iothub_client_context *ctx)
   if ((rc = transport_sendPacketBuffer(ctx->host, ctx->port, scratch_buffer, len)) != 0)
   {
     printf(
-        "Failed to publish telemetry message with packet id %d, return code %d\r\n", ctx->packetid, rc);
+        "Failed to publish telemetry message with packet id %d, return code %d\r\n",
+        ctx->packetid,
+        rc);
     return rc;
   }
 
@@ -440,7 +460,9 @@ static int receive_puback()
     unsigned short packet_id, topic_id;
     unsigned char returncode;
 
-    if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, scratch_buffer, sizeof(scratch_buffer)) != 1
+    if (MQTTSNDeserialize_puback(
+            &topic_id, &packet_id, &returncode, scratch_buffer, sizeof(scratch_buffer))
+            != 1
         || returncode != MQTTSN_RC_ACCEPTED)
     {
       printf(
@@ -462,7 +484,7 @@ static int receive_puback()
 }
 #endif
 
-static int attempt_publish(iothub_client_context *ctx)
+static int attempt_publish(iothub_client_context* ctx)
 {
   int rc;
   int len;
@@ -492,7 +514,7 @@ static int attempt_publish(iothub_client_context *ctx)
   return 0;
 }
 
-static int send_telemetry(iothub_client_context *ctx)
+static int send_telemetry(iothub_client_context* ctx)
 {
   int rc;
   int len;
@@ -510,7 +532,7 @@ static int send_telemetry(iothub_client_context *ctx)
   return 0;
 }
 
-static int disconnect_device(iothub_client_context *ctx)
+static int disconnect_device(iothub_client_context* ctx)
 {
   int rc;
   int len;
@@ -542,12 +564,12 @@ int main(int argc, char** argv)
 
   iothub_client_context iothub_ctx;
 
-  if ((rc = init(&iothub_ctx)) != 0) 
+  if ((rc = init_client_context(&iothub_ctx)) != 0)
   {
     return rc;
   }
 
-  if ((rc = initialize(&iothub_ctx)) != 0) 
+  if ((rc = init_transport_and_get_topicname(&iothub_ctx)) != 0)
   {
     return rc;
   }

@@ -61,7 +61,9 @@
 #include <sys/ioctl.h>
 #endif
 
+#ifndef SRC_PORT
 #define SRC_PORT 1234
+#endif
 
 /**
 This simple low-level implementation assumes a single connection for a single thread. Thus, a static
@@ -130,8 +132,11 @@ return >=0 for a socket descriptor, <0 for an error code
 int transport_open()
 {
   mysock = socket(AF_INET, SOCK_DGRAM, 0);
+
   if (mysock == INVALID_SOCKET)
+  {
     return Socket_error("socket", mysock);
+  }
 
   // set custom source port
 #ifdef SRC_PORT
