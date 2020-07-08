@@ -33,7 +33,16 @@
 static char topicname[128];
 static char device_id[64];
 static char iot_hub_hostname[128];
-static az_iot_hub_client client;
+static unsigned char scratch_buffer[128];
+
+typedef struct iothub_client_context_tag
+{
+    char *host;
+    int port;
+    unsigned short telemetry_topic_id;
+    az_iot_hub_client client;
+    short packetid;
+} iothub_client_context; 
 
 char* const default_gateway_address = "127.0.0.1";
 const int default_gateway_port = 10000; // use unicast port if sending a unicast packet
@@ -84,7 +93,7 @@ static az_result read_configuration_entry(
   return AZ_OK;
 }
 
-static az_result read_configuration_and_init_client()
+static az_result read_configuration_and_init_client(az_iot_hub_client* client)
 {
   az_span device_id_span = AZ_SPAN_FROM_BUFFER(device_id);
   AZ_RETURN_IF_FAILED(read_configuration_entry(
@@ -101,12 +110,30 @@ static az_result read_configuration_and_init_client()
 
   // Initialize the hub client with the hub host endpoint and the default connection options
   AZ_RETURN_IF_FAILED(az_iot_hub_client_init(
-      &client,
+      client,
       az_span_slice(iot_hub_hostname_span, 0, (int32_t)strlen(iot_hub_hostname)),
       az_span_slice(device_id_span, 0, (int32_t)strlen(device_id)),
       NULL));
 
   return AZ_OK;
+}
+
+static int init(iothub_client_context *ctx, char *host, int port)
+{
+  int rc; 
+
+  ctx->host = host;
+  ctx->port = port;
+  ctx->packetid = 0;
+  
+  // Read in the necessary environment variables and initialize the az_iot_hub_client
+  if (az_failed(rc = read_configuration_and_init_client(&ctx->client)))
+  {
+    printf("Failed to read configuration from environment variables, return code %d\r\n", rc);
+    return rc;
+  }
+
+  return 0;
 }
 
 static int exit_sample()
@@ -120,28 +147,22 @@ static int exit_sample()
   return 0;
 }
 
-static int initialize(int socket, char* host, int port)
+static int initialize(iothub_client_context *ctx)
 {
   int rc;
 
   // Create a unicast UDP socket
-  socket = transport_open();
-  if (socket < 0)
-    return socket;
-
-  printf("Connecting to host '%s', port '%d'\r\n", host, port);
-
-  // Read in the necessary environment variables and initialize the az_iot_hub_client
-  if (az_failed(rc = read_configuration_and_init_client()))
+  if ((rc = transport_open()) < 0)
   {
-    printf("Failed to read configuration from environment variables, return code %d\r\n", rc);
     return rc;
   }
+
+  printf("Connecting to host '%s', port '%d'\r\n", ctx->host, ctx->port);
 
   // Get topic name that the IoT Hub is subscribed to
   if (az_failed(
           rc = az_iot_hub_client_telemetry_get_publish_topic(
-              &client, NULL, topicname, sizeof(topicname), NULL)))
+              &ctx->client, NULL, topicname, sizeof(topicname), NULL)))
   {
     printf("Failed to get publish topic, return code %d\r\n", rc);
     return rc;
@@ -150,30 +171,25 @@ static int initialize(int socket, char* host, int port)
   return 0;
 }
 
-int getConnTimeout(int attemptNumber)
+int get_connection_timeout(int attemptNumber)
 { // First 10 attempts try within 3 seconds, next 10 attempts retry after every 1 minute
   // after 20 attempts, retry every 10 minutes
   return (attemptNumber < 10) ? 3 : (attemptNumber < 20) ? 60 : 600;
 }
 
-static int send_connect(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    MQTTSNPacket_connectData options)
+static int send_connect(iothub_client_context *ctx, MQTTSNPacket_connectData* options)
 {
   int rc;
   int len;
 
   // CONNECT to MQTTSN Gateway
-  if ((len = MQTTSNSerialize_connect(buf, buflen, &options)) == 0)
+  if ((len = MQTTSNSerialize_connect(scratch_buffer, sizeof(scratch_buffer), options)) == 0)
   {
     printf("Failed to serialize Connect packet, return code %d\r\n", len);
     return len;
   }
 
-  if ((rc = transport_sendPacketBuffer(host, port, buf, len)) != 0)
+  if ((rc = transport_sendPacketBuffer(ctx->host, ctx->port, scratch_buffer, len)) != 0)
   {
     printf("Failed to send Connect packet to the Gateway, return code %d\r\n", rc);
     return rc;
@@ -182,21 +198,22 @@ static int send_connect(
   return 0;
 }
 
-static int receive_connack(unsigned char buf[], int buflen)
+static int receive_connack()
 {
   int rc;
 
   // Wait for CONNACK from the MQTTSN Gateway
-  if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_CONNACK)
+  if (MQTTSNPacket_read(scratch_buffer, sizeof(scratch_buffer), transport_getdata) == MQTTSN_CONNACK)
   {
-    if (MQTTSNDeserialize_connack(&rc, buf, buflen) != 1 || rc != 0)
+    if (MQTTSNDeserialize_connack(&rc, scratch_buffer, sizeof(scratch_buffer)) != 1 || rc != 0)
     {
       printf("Failed to receive Connect ACK packet, return code %d\r\n", rc);
     }
     else
     {
-      printf("CONNACK rc %d\r\n", rc);
+      printf("CONNACK\r\n");
     }
+
     return rc;
   }
   else
@@ -208,31 +225,25 @@ static int receive_connack(unsigned char buf[], int buflen)
   return 0;
 }
 
-static int attempt_connect(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    MQTTSNPacket_connectData options)
+static int attempt_connect(iothub_client_context *ctx, MQTTSNPacket_connectData* options)
 {
   int rc;
   int len;
 
-  if ((rc = send_connect(buf, buflen, host, port, options)) != 0)
+  if ((rc = send_connect(ctx, options)) != 0)
   {
     return rc;
   }
 
-  if ((rc = receive_connack(buf, buflen)) != 0)
+  if ((rc = receive_connack()) != 0)
   {
-    printf("Retrying...\r\n");
     return rc;
   }
 
   return 0;
 }
 
-static int connect_device(unsigned char buf[], int buflen, char* host, int port)
+static int connect_device(iothub_client_context *ctx)
 {
   int rc;
   int len;
@@ -240,11 +251,11 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
   MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
   options.clientID.cstring = device_id;
 
-  while (attempt_connect(buf, buflen, host, port, options) != 0)
+  while (attempt_connect(ctx, &options) != 0)
   {
     static int retryAttempt = 0;
 
-    int timeout = getConnTimeout(++retryAttempt);
+    int timeout = get_connection_timeout(++retryAttempt);
     printf("Retry attempt number %d waiting %d\n", retryAttempt, timeout);
 
     sleep_seconds(timeout);
@@ -253,29 +264,23 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
   return 0;
 }
 
-static int send_register(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    MQTTSNString topicstr,
-    short packetid)
+static int send_register(iothub_client_context *ctx, MQTTSNString* topicstr)
 {
   int rc;
   int len;
 
   // REGISTER topic name with the MQTTSN Gateway
   printf("Registering topic %s\r\n", topicname);
-  topicstr.cstring = topicname;
-  topicstr.lenstring.len = strlen(topicname);
+  topicstr->cstring = topicname;
+  topicstr->lenstring.len = strlen(topicname);
 
-  if ((len = MQTTSNSerialize_register(buf, buflen, 0, packetid, &topicstr)) == 0)
+  if ((len = MQTTSNSerialize_register(scratch_buffer, sizeof(scratch_buffer), 0, ctx->packetid, topicstr)) == 0)
   {
     printf("Failed to serialize Register packet, return code %d\r\n", len);
     return len;
   }
 
-  if ((rc = transport_sendPacketBuffer(host, port, buf, len)) != 0)
+  if ((rc = transport_sendPacketBuffer(ctx->host, ctx->port, scratch_buffer, len)) != 0)
   {
     printf("Failed to send Register packet to the Gateway, return code %d\r\n", rc);
     return rc;
@@ -284,17 +289,17 @@ static int send_register(
   return 0;
 }
 
-static int receive_regack(unsigned char buf[], int buflen, unsigned short* topicid)
+static int receive_regack(iothub_client_context *ctx)
 {
   int len;
 
   // Wait for REGACK from the MQTTSN Gateway
-  if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_REGACK)
+  if (MQTTSNPacket_read(scratch_buffer, sizeof(scratch_buffer), transport_getdata) == MQTTSN_REGACK)
   {
     unsigned short submsgid;
     unsigned char returncode;
 
-    if (MQTTSNDeserialize_regack(topicid, &submsgid, &returncode, buf, buflen) != 1
+    if (MQTTSNDeserialize_regack(&ctx->telemetry_topic_id, &submsgid, &returncode, scratch_buffer, sizeof(scratch_buffer)) != 1
         || returncode != 0)
     {
       printf("Failed to receive Register ACK packet, return code %d\r\n", returncode);
@@ -302,7 +307,7 @@ static int receive_regack(unsigned char buf[], int buflen, unsigned short* topic
     }
     else
     {
-      printf("REGACK with topic id %d \r\n", *topicid);
+      printf("REGACK with topic id %d \r\n", ctx->telemetry_topic_id);
     }
   }
   else
@@ -314,24 +319,17 @@ static int receive_regack(unsigned char buf[], int buflen, unsigned short* topic
   return 0;
 }
 
-static int attempt_register(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    MQTTSNString topicstr,
-    short packetid,
-    unsigned short* topicid)
+static int attempt_register(iothub_client_context *ctx, MQTTSNString* topicstr)
 {
   int rc;
   int len;
 
-  if ((rc = send_register(buf, buflen, host, port, topicstr, packetid)) != 0)
+  if ((rc = send_register(ctx, topicstr)) != 0)
   {
     return rc;
   }
 
-  if ((rc = receive_regack(buf, buflen, topicid)) != 0)
+  if ((rc = receive_regack(ctx)) != 0)
   {
     printf("Retrying...\r\n");
     return rc;
@@ -340,23 +338,17 @@ static int attempt_register(
   return 0;
 }
 
-static int register_topic(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    short packetid,
-    unsigned short* topicid)
+static int register_topic(iothub_client_context *ctx)
 {
   int rc;
   int len;
   MQTTSNString topicstr;
 
-  while (attempt_register(buf, buflen, host, port, topicstr, packetid, topicid) != 0)
+  while (attempt_register(ctx, &topicstr) != 0)
   {
     static int retryAttempt = 0;
 
-    int timeout = getConnTimeout(++retryAttempt);
+    int timeout = get_connection_timeout(++retryAttempt);
     printf("Retry attempt number %d waiting %d\n", retryAttempt, timeout);
 
     sleep_seconds(timeout);
@@ -365,13 +357,7 @@ static int register_topic(
   return 0;
 }
 
-static int send_publish(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    short packetid,
-    unsigned short* topicid)
+static int send_publish(iothub_client_context *ctx)
 {
   int rc;
   int len;
@@ -386,16 +372,16 @@ static int send_publish(
 #endif
 
   topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
-  topic.data.id = *topicid;
+  topic.data.id = ctx->telemetry_topic_id;
 
   // PUBLISH
   if ((len = MQTTSNSerialize_publish(
-           buf,
-           buflen,
+           scratch_buffer,
+           sizeof(scratch_buffer),
            0,
            qos,
            retained,
-           packetid,
+           ctx->packetid,
            topic,
            TELEMETRY_PAYLOAD,
            sizeof(TELEMETRY_PAYLOAD)))
@@ -405,10 +391,10 @@ static int send_publish(
     return len;
   }
 
-  if ((rc = transport_sendPacketBuffer(host, port, buf, len)) != 0)
+  if ((rc = transport_sendPacketBuffer(ctx->host, ctx->port, scratch_buffer, len)) != 0)
   {
     printf(
-        "Failed to publish telemetry message with packet id %d, return code %d\r\n", packetid, rc);
+        "Failed to publish telemetry message with packet id %d, return code %d\r\n", ctx->packetid, rc);
     return rc;
   }
 
@@ -418,15 +404,15 @@ static int send_publish(
 }
 
 #ifdef ENABLE_PUBACK
-static int receive_puback(unsigned char buf[], int buflen)
+static int receive_puback()
 {
   // Wait for PUBACK
-  if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
+  if (MQTTSNPacket_read(scratch_buffer, sizeof(scratch_buffer), transport_getdata) == MQTTSN_PUBACK)
   {
     unsigned short packet_id, topic_id;
     unsigned char returncode;
 
-    if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1
+    if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, scratch_buffer, sizeof(scratch_buffer)) != 1
         || returncode != MQTTSN_RC_ACCEPTED)
     {
       printf(
@@ -448,13 +434,7 @@ static int receive_puback(unsigned char buf[], int buflen)
 }
 #endif
 
-static int attempt_publish(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    short packetid,
-    unsigned short* topicid)
+static int attempt_publish(iothub_client_context *ctx)
 {
   int rc;
   int len;
@@ -464,13 +444,15 @@ static int attempt_publish(
   {
     printf("Sending Message %d\r\n", i + 1);
 
-    if ((rc = send_publish(buf, buflen, host, port, packetid + i, topicid)) != 0)
+    ctx->packetid = ctx->packetid + 1;
+
+    if ((rc = send_publish(ctx)) != 0)
     {
       return rc;
     }
 
 #ifdef ENABLE_PUBACK
-    if ((rc = receive_puback(buf, buflen)) != 0)
+    if ((rc = receive_puback()) != 0)
     {
       printf("Retrying...\r\n");
       return rc;
@@ -483,22 +465,16 @@ static int attempt_publish(
   return 0;
 }
 
-static int send_telemetry(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    short packetid,
-    unsigned short* topicid)
+static int send_telemetry(iothub_client_context *ctx)
 {
   int rc;
   int len;
 
-  while (attempt_publish(buf, buflen, host, port, packetid, topicid) != 0)
+  while (attempt_publish(ctx) != 0)
   {
     static int retryAttempt = 0;
 
-    int timeout = getConnTimeout(++retryAttempt);
+    int timeout = get_connection_timeout(++retryAttempt);
     printf("Retry attempt number %d waiting %d\n", retryAttempt, timeout);
 
     sleep_seconds(timeout);
@@ -507,7 +483,7 @@ static int send_telemetry(
   return 0;
 }
 
-static int disconnect_device(unsigned char buf[], int buflen, char* host, int port)
+static int disconnect_device(iothub_client_context *ctx)
 {
   int rc;
   int len;
@@ -515,13 +491,13 @@ static int disconnect_device(unsigned char buf[], int buflen, char* host, int po
   // DISCONNECT the client
   printf("Disconnecting\r\n");
 
-  if ((len = MQTTSNSerialize_disconnect(buf, buflen, 0)) == 0)
+  if ((len = MQTTSNSerialize_disconnect(scratch_buffer, sizeof(scratch_buffer), 0)) == 0)
   {
     printf("Failed to serialize Disconnect packet, return code %d\r\n", len);
     return len;
   }
 
-  if ((rc = transport_sendPacketBuffer(host, port, buf, len)) != 0)
+  if ((rc = transport_sendPacketBuffer(ctx->host, ctx->port, scratch_buffer, len)) != 0)
   {
     printf("Failed to send Disconnect packet to the Gateway, return code %d\r\n", rc);
     return rc;
@@ -535,37 +511,40 @@ static int disconnect_device(unsigned char buf[], int buflen, char* host, int po
 int main(int argc, char** argv)
 {
   int rc;
-  int udp_socket;
-  unsigned char buf[128];
-  int buflen = sizeof(buf);
-  short packetid = 1;
   unsigned short topicid;
 
   // Read for optional destination address and port
   char* host = argc > 1 ? argv[1] : default_gateway_address;
   int port = argc > 2 ? atoi(argv[2]) : default_gateway_port;
 
-  if ((rc = initialize(udp_socket, host, port)) != 0)
+  iothub_client_context iothub_ctx;
+
+  if ((rc = init(&iothub_ctx, host, port)) != 0) 
   {
     return rc;
   }
 
-  if ((rc = connect_device(buf, buflen, host, port)) != 0)
+  if ((rc = initialize(&iothub_ctx)) != 0) 
   {
     return rc;
   }
 
-  if ((rc = register_topic(buf, buflen, host, port, packetid, &topicid)) != 0)
+  if ((rc = connect_device(&iothub_ctx)) != 0)
   {
     return rc;
   }
 
-  if ((rc = send_telemetry(buf, buflen, host, port, packetid, &topicid)) != 0)
+  if ((rc = register_topic(&iothub_ctx)) != 0)
   {
     return rc;
   }
 
-  if ((rc = disconnect_device(buf, buflen, host, port)) != 0)
+  if ((rc = send_telemetry(&iothub_ctx)) != 0)
+  {
+    return rc;
+  }
+
+  if ((rc = disconnect_device(&iothub_ctx)) != 0)
   {
     return rc;
   }
