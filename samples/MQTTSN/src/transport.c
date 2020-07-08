@@ -62,7 +62,7 @@
 #endif
 
 #ifndef SRC_PORT
-#define SRC_PORT 1234
+#define SRC_PORT _SRC_PORT
 #endif
 
 /**
@@ -144,6 +144,8 @@ int transport_open()
   srcaddr.sin_family = AF_INET;
   srcaddr.sin_addr.s_addr = htonl(INADDR_ANY);
   srcaddr.sin_port = htons(SRC_PORT);
+
+  printf("SRC_PORT=%d\r\n", SRC_PORT);
 
   if (bind(mysock, (struct sockaddr*)&srcaddr, sizeof(srcaddr)) < 0)
   {
