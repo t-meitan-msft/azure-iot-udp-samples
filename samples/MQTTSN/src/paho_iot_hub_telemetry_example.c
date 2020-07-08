@@ -26,6 +26,10 @@
 #define TELEMETRY_PAYLOAD \
   "{\"d\":{\"myName\":\"IoT mbed\",\"accelX\":12,\"accelY\":4,\"accelZ\":12,\"temp\":18}}"
 
+#if !defined(MQTT_QOS) || (defined(MQTT_QOS) && MQTT_QOS == 1) // default to qos 1
+#define ENABLE_PUBACK true
+#endif
+
 static char topicname[128];
 static char device_id[64];
 static char iot_hub_hostname[128];
@@ -152,7 +156,7 @@ int getConnTimeout(int attemptNumber)
   return (attemptNumber < 10) ? 3 : (attemptNumber < 20) ? 60 : 600;
 }
 
-static int connect(
+static int send_connect(
     unsigned char buf[],
     int buflen,
     char* host,
@@ -178,12 +182,7 @@ static int connect(
   return 0;
 }
 
-static int receive_connack(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    MQTTSNPacket_connectData options)
+static int receive_connack(unsigned char buf[], int buflen)
 {
   int rc;
 
@@ -219,12 +218,12 @@ static int attempt_connect(
   int rc;
   int len;
 
-  if ((rc = connect(buf, buflen, host, port, options)) != 0)
+  if ((rc = send_connect(buf, buflen, host, port, options)) != 0)
   {
     return rc;
   }
 
-  if ((rc = receive_connack(buf, buflen, host, port, options)) != 0)
+  if ((rc = receive_connack(buf, buflen)) != 0)
   {
     printf("Retrying...\r\n");
     return rc;
@@ -248,14 +247,19 @@ static int connect_device(unsigned char buf[], int buflen, char* host, int port)
     int timeout = getConnTimeout(++retryAttempt);
     printf("Retry attempt number %d waiting %d\n", retryAttempt, timeout);
 
-    sleep(timeout);
+    sleep_seconds(timeout);
   }
 
   return 0;
 }
 
-static int
-reg(unsigned char buf[], int buflen, char* host, int port, MQTTSNString topicstr, short packetid)
+static int send_register(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    MQTTSNString topicstr,
+    short packetid)
 {
   int rc;
   int len;
@@ -280,15 +284,8 @@ reg(unsigned char buf[], int buflen, char* host, int port, MQTTSNString topicstr
   return 0;
 }
 
-static int receive_regack(
-    unsigned char buf[],
-    int buflen,
-    char* host,
-    int port,
-    MQTTSNString topicstr,
-    unsigned short* topicid)
+static int receive_regack(unsigned char buf[], int buflen, unsigned short* topicid)
 {
-  int rc;
   int len;
 
   // Wait for REGACK from the MQTTSN Gateway
@@ -297,16 +294,16 @@ static int receive_regack(
     unsigned short submsgid;
     unsigned char returncode;
 
-    rc = MQTTSNDeserialize_regack(topicid, &submsgid, &returncode, buf, buflen);
-    if (returncode != 0)
+    if (MQTTSNDeserialize_regack(topicid, &submsgid, &returncode, buf, buflen) != 1
+        || returncode != 0)
     {
       printf("Failed to receive Register ACK packet, return code %d\r\n", returncode);
+      return -1;
     }
     else
     {
-      printf("REGACK with topic id %d, retrun code %d\r\n", *topicid, rc);
+      printf("REGACK with topic id %d \r\n", *topicid);
     }
-    return rc;
   }
   else
   {
@@ -329,12 +326,12 @@ static int attempt_register(
   int rc;
   int len;
 
-  if ((rc = reg(buf, buflen, host, port, topicstr, packetid)) != 0)
+  if ((rc = send_register(buf, buflen, host, port, topicstr, packetid)) != 0)
   {
     return rc;
   }
 
-  if ((rc = receive_regack(buf, buflen, host, port, topicstr, topicid)) != 0)
+  if ((rc = receive_regack(buf, buflen, topicid)) != 0)
   {
     printf("Retrying...\r\n");
     return rc;
@@ -362,13 +359,13 @@ static int register_topic(
     int timeout = getConnTimeout(++retryAttempt);
     printf("Retry attempt number %d waiting %d\n", retryAttempt, timeout);
 
-    sleep(timeout);
+    sleep_seconds(timeout);
   }
 
   return 0;
 }
 
-static int send_telemetry(
+static int send_publish(
     unsigned char buf[],
     int buflen,
     char* host,
@@ -388,60 +385,125 @@ static int send_telemetry(
   qos = 1;
 #endif
 
+  topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
+  topic.data.id = *topicid;
+
+  // PUBLISH
+  if ((len = MQTTSNSerialize_publish(
+           buf,
+           buflen,
+           0,
+           qos,
+           retained,
+           packetid,
+           topic,
+           TELEMETRY_PAYLOAD,
+           sizeof(TELEMETRY_PAYLOAD)))
+      == 0)
+  {
+    printf("Failed to serialize Publish packet, return code %d\r\n", len);
+    return len;
+  }
+
+  if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+  {
+    printf(
+        "Failed to publish telemetry message with packet id %d, return code %d\r\n", packetid, rc);
+    return rc;
+  }
+
+  printf("Published rc %d for publish length %d\r\n", rc, len);
+
+  return 0;
+}
+
+#ifdef ENABLE_PUBACK
+static int receive_puback(unsigned char buf[], int buflen)
+{
+  // Wait for PUBACK
+  if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
+  {
+    unsigned short packet_id, topic_id;
+    unsigned char returncode;
+
+    if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1
+        || returncode != MQTTSN_RC_ACCEPTED)
+    {
+      printf(
+          "Failed to receive Publish ACK packet ID %hu, return code %d\r\n", packet_id, returncode);
+      return -1;
+    }
+    else
+    {
+      printf("PUBACK received, packet ID %hu\r\n", packet_id);
+    }
+  }
+  else
+  {
+    printf("Failed to Acknowledge Publish packet\r\n");
+    return -1;
+  }
+
+  return 0;
+}
+#endif
+
+static int attempt_publish(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    short packetid,
+    unsigned short* topicid)
+{
+  int rc;
+  int len;
+
   // Publish 5 messages
   for (int i = 0; i < NUMBER_OF_MESSAGES; ++i)
   {
     printf("Sending Message %d\r\n", i + 1);
-    topic.type = MQTTSN_TOPIC_TYPE_NORMAL;
-    topic.data.id = *topicid;
 
-    // PUBLISH
-    if ((len = MQTTSNSerialize_publish(
-             buf,
-             buflen,
-             0,
-             qos,
-             retained,
-             packetid + i,
-             topic,
-             TELEMETRY_PAYLOAD,
-             sizeof(TELEMETRY_PAYLOAD)))
-        == 0)
+    if ((rc = send_publish(buf, buflen, host, port, packetid + i, topicid)) != 0)
     {
-      printf("Failed to serialize Publish packet, return code %d\r\n", len);
-      return len;
-    }
-
-    if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
-    {
-      printf("Failed to publish telemetry message %d, return code %d\r\n", i + 1, rc);
       return rc;
     }
 
-    printf("Published rc %d for publish length %d\r\n", rc, len);
-
-#if !defined(MQTT_QOS) || (defined(MQTT_QOS) && MQTT_QOS == 1) // default to qos 1
-    // Wait for PUBACK
-    if (MQTTSNPacket_read(buf, buflen, transport_getdata) == MQTTSN_PUBACK)
+#ifdef ENABLE_PUBACK
+    if ((rc = receive_puback(buf, buflen)) != 0)
     {
-      unsigned short packet_id, topic_id;
-      unsigned char returncode;
-
-      if (MQTTSNDeserialize_puback(&topic_id, &packet_id, &returncode, buf, buflen) != 1
-          || returncode != MQTTSN_RC_ACCEPTED)
-        printf("Failed to receive Publish ACK packet, return code %d\r\n", returncode);
-      else
-        printf("PUBACK received, id %d\r\n", packet_id);
-    }
-    else
-    {
-      printf("Failed to Acknowledge Publish packet\r\nExiting...\r\n");
-      exit_sample(); // TODO
+      printf("Retrying...\r\n");
+      return rc;
     }
 #endif
 
     sleep_seconds(TELEMETRY_SEND_INTERVAL); // Publish a message every second
   }
+
+  return 0;
+}
+
+static int send_telemetry(
+    unsigned char buf[],
+    int buflen,
+    char* host,
+    int port,
+    short packetid,
+    unsigned short* topicid)
+{
+  int rc;
+  int len;
+
+  while (attempt_publish(buf, buflen, host, port, packetid, topicid) != 0)
+  {
+    static int retryAttempt = 0;
+
+    int timeout = getConnTimeout(++retryAttempt);
+    printf("Retry attempt number %d waiting %d\n", retryAttempt, timeout);
+
+    sleep_seconds(timeout);
+  }
+
   return 0;
 }
 
