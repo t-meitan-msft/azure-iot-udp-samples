@@ -20,7 +20,15 @@
 // DO NOT MODIFY: IoT Hub Hostname Environment Variable Name
 #define ENV_IOT_HUB_HOSTNAME "AZ_IOT_HUB_HOSTNAME"
 
+// DO NOT MODIFY: MQTTSN Gateway IP Address Environment Variable Name
+#define ENV_MQTTSN_GATEWAY_ADDRESS "MQTTSN_GATEWAY_ADDRESS"
+
+// DO NOT MODIFY: MQTTSN Gateway Port Environment Variable Name
+#define ENV_MQTTSN_GATEWAY_PORT "MQTTSN_GATEWAY_PORT"
+
 // #define MQTT_QOS 0 // if not defined, default qos is 1
+#define DEFAULT_GATEWAY_ADDRESS "127.0.0.1"
+#define DEFAULT_GATEWAY_PORT "10000"
 #define TELEMETRY_SEND_INTERVAL 1 // seconds
 #define NUMBER_OF_MESSAGES 5
 #define TELEMETRY_PAYLOAD \
@@ -34,6 +42,8 @@ static char topicname[128];
 static char device_id[64];
 static char iot_hub_hostname[128];
 static unsigned char scratch_buffer[128];
+static char gateway_address[16];
+static char gateway_port[8];
 
 typedef struct iothub_client_context_tag
 {
@@ -43,9 +53,6 @@ typedef struct iothub_client_context_tag
     az_iot_hub_client client;
     short packetid;
 } iothub_client_context; 
-
-char* const default_gateway_address = "127.0.0.1";
-const int default_gateway_port = 10000; // use unicast port if sending a unicast packet
 
 static void sleep_seconds(uint32_t seconds)
 {
@@ -93,7 +100,7 @@ static az_result read_configuration_entry(
   return AZ_OK;
 }
 
-static az_result read_configuration_and_init_client(az_iot_hub_client* client)
+static az_result read_configuration_and_init_client(az_iot_hub_client* client, char** host, int* port)
 {
   az_span device_id_span = AZ_SPAN_FROM_BUFFER(device_id);
   AZ_RETURN_IF_FAILED(read_configuration_entry(
@@ -108,6 +115,24 @@ static az_result read_configuration_and_init_client(az_iot_hub_client* client)
       iot_hub_hostname_span,
       &iot_hub_hostname_span));
 
+  az_span gateway_address_span = AZ_SPAN_FROM_BUFFER(gateway_address);
+  AZ_RETURN_IF_FAILED(read_configuration_entry(
+      ENV_MQTTSN_GATEWAY_ADDRESS,
+      ENV_MQTTSN_GATEWAY_ADDRESS,
+      DEFAULT_GATEWAY_ADDRESS,
+      false,
+      gateway_address_span,
+      &gateway_address_span));
+
+  az_span gateway_port_span = AZ_SPAN_FROM_BUFFER(gateway_port);
+  AZ_RETURN_IF_FAILED(read_configuration_entry(
+      ENV_MQTTSN_GATEWAY_PORT,
+      ENV_MQTTSN_GATEWAY_PORT,
+      DEFAULT_GATEWAY_PORT,
+      false,
+      gateway_port_span,
+      &gateway_port_span));
+
   // Initialize the hub client with the hub host endpoint and the default connection options
   AZ_RETURN_IF_FAILED(az_iot_hub_client_init(
       client,
@@ -115,19 +140,23 @@ static az_result read_configuration_and_init_client(az_iot_hub_client* client)
       az_span_slice(device_id_span, 0, (int32_t)strlen(device_id)),
       NULL));
 
+  // Save gateway address to context
+  az_span_to_str(gateway_address, sizeof(gateway_address), az_span_slice(gateway_address_span, 0, (int32_t)strlen(gateway_address)));
+  *host = gateway_address;
+
+  // Save gateway port to context
+  AZ_RETURN_IF_FAILED(az_span_atou32(az_span_slice(gateway_port_span, 0, (int32_t)strlen(gateway_port)), port));
+
   return AZ_OK;
 }
 
-static int init(iothub_client_context *ctx, char *host, int port)
+static int init(iothub_client_context *ctx)
 {
   int rc; 
-
-  ctx->host = host;
-  ctx->port = port;
   ctx->packetid = 0;
   
   // Read in the necessary environment variables and initialize the az_iot_hub_client
-  if (az_failed(rc = read_configuration_and_init_client(&ctx->client)))
+  if (az_failed(rc = read_configuration_and_init_client(&ctx->client, &ctx->host, &ctx->port)))
   {
     printf("Failed to read configuration from environment variables, return code %d\r\n", rc);
     return rc;
@@ -331,7 +360,6 @@ static int attempt_register(iothub_client_context *ctx, MQTTSNString* topicstr)
 
   if ((rc = receive_regack(ctx)) != 0)
   {
-    printf("Retrying...\r\n");
     return rc;
   }
 
@@ -398,7 +426,7 @@ static int send_publish(iothub_client_context *ctx)
     return rc;
   }
 
-  printf("Published rc %d for publish length %d\r\n", rc, len);
+  printf("Published telemetry payload of length %d\r\n", len);
 
   return 0;
 }
@@ -454,7 +482,6 @@ static int attempt_publish(iothub_client_context *ctx)
 #ifdef ENABLE_PUBACK
     if ((rc = receive_puback()) != 0)
     {
-      printf("Retrying...\r\n");
       return rc;
     }
 #endif
@@ -513,13 +540,9 @@ int main(int argc, char** argv)
   int rc;
   unsigned short topicid;
 
-  // Read for optional destination address and port
-  char* host = argc > 1 ? argv[1] : default_gateway_address;
-  int port = argc > 2 ? atoi(argv[2]) : default_gateway_port;
-
   iothub_client_context iothub_ctx;
 
-  if ((rc = init(&iothub_ctx, host, port)) != 0) 
+  if ((rc = init(&iothub_ctx)) != 0) 
   {
     return rc;
   }
