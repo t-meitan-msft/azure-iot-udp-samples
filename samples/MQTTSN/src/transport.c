@@ -62,7 +62,7 @@
 #endif
 
 #ifndef SRC_PORT
-#define SRC_PORT _SRC_PORT
+#define SRC_PORT 1234
 #endif
 
 /**
