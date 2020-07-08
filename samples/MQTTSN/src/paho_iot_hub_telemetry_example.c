@@ -173,7 +173,7 @@ static int send_connect(
     return len;
   }
 
-  if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+  if ((rc = transport_sendPacketBuffer(host, port, buf, len)) != 0)
   {
     printf("Failed to send Connect packet to the Gateway, return code %d\r\n", rc);
     return rc;
@@ -275,7 +275,7 @@ static int send_register(
     return len;
   }
 
-  if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+  if ((rc = transport_sendPacketBuffer(host, port, buf, len)) != 0)
   {
     printf("Failed to send Register packet to the Gateway, return code %d\r\n", rc);
     return rc;
@@ -405,7 +405,7 @@ static int send_publish(
     return len;
   }
 
-  if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+  if ((rc = transport_sendPacketBuffer(host, port, buf, len)) != 0)
   {
     printf(
         "Failed to publish telemetry message with packet id %d, return code %d\r\n", packetid, rc);
@@ -521,7 +521,7 @@ static int disconnect_device(unsigned char buf[], int buflen, char* host, int po
     return len;
   }
 
-  if (az_failed(rc = transport_sendPacketBuffer(host, port, buf, len)))
+  if ((rc = transport_sendPacketBuffer(host, port, buf, len)) != 0)
   {
     printf("Failed to send Disconnect packet to the Gateway, return code %d\r\n", rc);
     return rc;
