@@ -4,6 +4,17 @@ git clone https://github.com/t-meitan-msft/azure-iot-udp-samples.git
 
 git submodule update --init --recursive
 ```
+---
+## Configure the Paho MQTT-SN Client Sample
+* Modify the [CMakeLists.txt](samples\MQTTSN\CMakeLists.txt) file to define custom SRC_PORT if desired. Otherwise, SRC_PORT=1234 by default. _The SRC_PORT Macro is used in [transport.c](samples\MQTTSN\src\transport.c)._
+* Define the following macros for the desired behaviour of the telemetry sample:
+
+| Macro                   | Definition                                                  |
+|-------------------------|-------------------------------------------------------------|
+| TELEMETRY_SEND_INTERVAL |Define at which interval to send each telemetry payload      |
+| NUMBER_OF_MESSAGES      |Define the total number of telemetry payload messages to send|
+| TELEMETRY_PAYLOAD       |Define the desired telemetry payload to send                 |
+| AZ_TELEMETRY_QOS_0      |Define whether use QoS 0                                     |
 
 ## Build the Paho MQTT-SN Client Sample
 
@@ -86,7 +97,7 @@ cd <path to your gateway build folder>
 
 ./MQTT-SNGateway -f gateway.conf
 ```
-
+---
 ## Monitoring the packets on Azure IoT Hub (optional)
 
 * Open [Azure IoT Explorer](https://github.com/Azure/azure-iot-explorer/releases)
@@ -101,6 +112,10 @@ Set the following environment variables for the device
 export AZ_IOT_DEVICE_ID=<your device ID>
 
 export AZ_IOT_HUB_HOSTNAME=<your hub name>.azure-devices.net
+
+export MQTTSN_GATEWAY_ADDRESS=<gateway's IP address>
+
+export MQTTSN_GATEWAY_PORT=<gateway's unicast port>
 ```
 
 Can connect to the default gateway address and port number specified in the sample or can optionally specify a different address and port:
@@ -108,9 +123,5 @@ Can connect to the default gateway address and port number specified in the samp
 ```
 cd <path to your local repo>/azure-iot-udp-samples/samples/MQTTSN/client_build
 
-./sample_qos_0 [host address] [destination port]
-
-or
-
-./sample_qos_1 [host address] [destination port]
+./sample_telemetry
 ```

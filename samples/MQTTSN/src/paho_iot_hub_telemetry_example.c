@@ -26,7 +26,6 @@
 // DO NOT MODIFY: MQTTSN Gateway Port Environment Variable Name
 #define ENV_MQTTSN_GATEWAY_PORT "MQTTSN_GATEWAY_PORT"
 
-// #define MQTT_QOS 0 // if not defined, default qos is 1
 #define DEFAULT_GATEWAY_ADDRESS "127.0.0.1"
 #define DEFAULT_GATEWAY_PORT "10000"
 #define TELEMETRY_SEND_INTERVAL 1 // seconds
