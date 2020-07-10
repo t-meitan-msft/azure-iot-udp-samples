@@ -1,6 +1,7 @@
-[submodule "samples/MQTTSN/lib/paho.mqtt-sn.embedded-c"]
-	path = samples/MQTTSN/lib/paho.mqtt-sn.embedded-c
-	url = https://github.com/hihigupt/paho.mqtt-sn.embedded-c
 [submodule "samples/MQTTSN/lib/azure-sdk-for-c"]
 	path = samples/MQTTSN/lib/azure-sdk-for-c
 	url = https://github.com/Azure/azure-sdk-for-c
+[submodule "samples/MQTTSN/lib/paho.mqtt-sn.embedded-c"]
+	path = samples/MQTTSN/lib/paho.mqtt-sn.embedded-c
+	url = https://github.com/eclipse/paho.mqtt-sn.embedded-c.git
+	branch = master

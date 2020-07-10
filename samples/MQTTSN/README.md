@@ -42,12 +42,15 @@ cmake --build .
 > Bug #2: modify in [MQTTSNProcess.h](samples\MQTTSN\lib\paho.mqtt-sn.embedded-c\MQTTSNGateway\src\MQTTSNGWProcess.h) the value of *MQTTSNGW_PARAM_MAX* to be more than the size of the gateway parameters size (for example, our Password parameter exceeds 128 so we changed to 256).
 
 ```
+cd azure-iot-udp-samples/samples/MQTTSN
+
+mkdir gateway_build
+
 cd azure-iot-udp-samples/samples/MQTTSN/lib/paho.mqtt-sn.embedded-c/MQTTSNGateway
 
 make
 
-make install INSTALL_D
-IR=<path to your gateway_build folder> CONFIG_DIR=<same path as gateway_build folder>
+make install INSTALL_DIR=<path to your gateway_build folder> CONFIG_DIR=<same path as gateway_build folder>
 
 make clean
 ```
