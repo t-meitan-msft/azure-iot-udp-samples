@@ -140,11 +140,7 @@ static int read_configuration_and_init_client(
       &iot_hub_hostname_span));
 
   // Initialize the hub client with the hub host endpoint and the default connection options
-  AZ_RETURN_IF_FAILED(az_iot_hub_client_init(
-      client,
-      az_span_slice(iot_hub_hostname_span, 0, (int32_t)strlen(iot_hub_hostname)),
-      az_span_slice(device_id_span, 0, (int32_t)strlen(device_id)),
-      NULL));
+  AZ_RETURN_IF_FAILED(az_iot_hub_client_init(client, iot_hub_hostname_span, device_id_span, NULL));
 
   // Read Gateway port number configuration
   az_span gateway_port_span = AZ_SPAN_FROM_BUFFER(scratch_buffer);
@@ -167,7 +163,8 @@ static int read_configuration_and_init_client(
 static int init_client_context(iothub_client_context* ctx)
 {
   int rc;
-  ctx->packet_id = 0;
+
+  memset((void*)ctx, 0, sizeof(iothub_client_context));
 
   if (rc = read_configuration_and_init_client(
           &ctx->client,

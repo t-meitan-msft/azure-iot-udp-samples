@@ -141,8 +141,6 @@ int transport_open()
   srcaddr.sin_addr.s_addr = htonl(INADDR_ANY);
   srcaddr.sin_port = htons(SRC_PORT);
 
-  printf("SRC_PORT=%d\r\n", SRC_PORT);
-
   if (bind(mysock, (struct sockaddr*)&srcaddr, sizeof(srcaddr)) < 0)
   {
     return Socket_error("socket", mysock);
