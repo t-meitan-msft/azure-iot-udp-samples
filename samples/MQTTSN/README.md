@@ -6,7 +6,7 @@ git submodule update --init --recursive
 ```
 ---
 ## Configure the Paho MQTT-SN Client Sample
-* Modify the [CMakeLists.txt](samples\MQTTSN\CMakeLists.txt) file to define custom SRC_PORT if desired. Otherwise, SRC_PORT=1234 by default. _The SRC_PORT Macro is used in [transport.c](samples\MQTTSN\src\transport.c)._
+* Modify the [CMakeLists.txt](samples\MQTTSN\CMakeLists.txt) file to define custom SRC_PORT if desired. Otherwise, SRC_PORT=1234 by default. The SRC_PORT Macro is used in [transport.c](samples\MQTTSN\src\transport.c).
 * Define the following macros for the desired behaviour of the telemetry sample:
 
 | Macro                   | Definition                                                  |

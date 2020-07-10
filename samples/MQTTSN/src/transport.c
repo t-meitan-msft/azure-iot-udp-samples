@@ -61,10 +61,6 @@
 #include <sys/ioctl.h>
 #endif
 
-#ifndef SRC_PORT
-#define SRC_PORT 1234
-#endif
-
 /**
 This simple low-level implementation assumes a single connection for a single thread. Thus, a static
 variable is used for that connection.
@@ -75,9 +71,7 @@ int)
 */
 static int mysock = INVALID_SOCKET;
 
-#ifdef SRC_PORT
 struct sockaddr_in addr, srcaddr;
-#endif
 
 int Socket_error(char* aString, int sock)
 {
@@ -139,7 +133,6 @@ int transport_open()
   }
 
   // set custom source port
-#ifdef SRC_PORT
   memset(&srcaddr, 0, sizeof(srcaddr));
   srcaddr.sin_family = AF_INET;
   srcaddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -151,7 +144,6 @@ int transport_open()
   {
     return Socket_error("socket", mysock);
   }
-#endif
 
   return mysock;
 }

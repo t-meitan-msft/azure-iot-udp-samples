@@ -5,6 +5,8 @@ cmake_minimum_required (VERSION 3.10)
 
 PROJECT(azure-iot-udp-samples)
 
+add_compile_definitions(SRC_PORT=1234)
+
 add_subdirectory(${PROJECT_SOURCE_DIR}/lib/azure-sdk-for-c)
 add_subdirectory(${PROJECT_SOURCE_DIR}/lib/paho.mqtt-sn.embedded-c/MQTTSNPacket/src)
 
