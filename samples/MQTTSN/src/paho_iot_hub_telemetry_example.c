@@ -44,6 +44,7 @@ static unsigned char scratch_buffer[128];
 
 typedef struct iothub_client_context_tag
 {
+  char iot_hub_hostname[128];
   char gateway_address[16];
   int gateway_port;
   char device_id[64];
@@ -103,9 +104,15 @@ static az_result read_configuration_entry(
 /*
  * Read configurations and initialize Azure IoT Hub Client
  */
-static az_result read_configuration_and_init_client(
+static int read_configuration_and_init_client(
     az_iot_hub_client* client,
-    char* device_id, int device_id_len, char* gateway_address, int gateway_address_len, int* gateway_port)
+    char* device_id,
+    int device_id_len,
+    char* gateway_address,
+    int gateway_address_len,
+    int* gateway_port,
+    char* iot_hub_hostname,
+    int iot_hub_hostname_len)
 {
   // Read Device ID configuration
   az_span device_id_span = az_span_init(device_id, device_id_len);
@@ -123,23 +130,23 @@ static az_result read_configuration_and_init_client(
       &gateway_address_span));
 
   // Read IoT Hub Hostname configuration
-  az_span iot_hub_hostname_span = AZ_SPAN_FROM_BUFFER(scratch_buffer);
+  az_span iot_hub_hostname_span = az_span_init(iot_hub_hostname, iot_hub_hostname_len);
   AZ_RETURN_IF_FAILED(read_configuration_entry(
       ENV_IOT_HUB_HOSTNAME,
       ENV_IOT_HUB_HOSTNAME,
       "",
       false,
       iot_hub_hostname_span,
-      &iot_hub_hostname_span));  
+      &iot_hub_hostname_span));
 
   // Initialize the hub client with the hub host endpoint and the default connection options
   AZ_RETURN_IF_FAILED(az_iot_hub_client_init(
       client,
-      az_span_slice(iot_hub_hostname_span, 0, (int32_t)strlen(scratch_buffer)),
+      az_span_slice(iot_hub_hostname_span, 0, (int32_t)strlen(iot_hub_hostname)),
       az_span_slice(device_id_span, 0, (int32_t)strlen(device_id)),
       NULL));
 
-  // Read Gateway port number
+  // Read Gateway port number configuration
   az_span gateway_port_span = AZ_SPAN_FROM_BUFFER(scratch_buffer);
   AZ_RETURN_IF_FAILED(read_configuration_entry(
       ENV_MQTTSN_GATEWAY_PORT,
@@ -149,27 +156,33 @@ static az_result read_configuration_and_init_client(
       gateway_port_span,
       &gateway_port_span));
 
-  AZ_RETURN_IF_FAILED(
-      az_span_atou32(gateway_port_span, gateway_port));
+  AZ_RETURN_IF_FAILED(az_span_atou32(gateway_port_span, gateway_port));
 
-  return AZ_OK;
+  return 0;
 }
 
 /*
- * Read the Environment Variables and and initialize the az_iot_hub_client
+ * Read the Environment Variables and initialize the az_iot_hub_client
  */
 static int init_client_context(iothub_client_context* ctx)
 {
   int rc;
   ctx->packet_id = 0;
 
-  if (az_failed(rc = read_configuration_and_init_client(&ctx->client, ctx->device_id, sizeof(ctx->device_id), ctx->gateway_address, sizeof(ctx->gateway_address), &ctx->gateway_port)))
+  if (rc = read_configuration_and_init_client(
+          &ctx->client,
+          ctx->device_id,
+          sizeof(ctx->device_id),
+          ctx->gateway_address,
+          sizeof(ctx->gateway_address),
+          &ctx->gateway_port,
+          ctx->iot_hub_hostname,
+          sizeof(ctx->iot_hub_hostname)))
   {
     printf("Failed to read configuration from environment variables, return code %d\r\n", rc);
-    return rc;
   }
 
-  return 0;
+  return rc;
 }
 
 /*
@@ -192,14 +205,16 @@ static int send_connect(iothub_client_context* ctx, MQTTSNPacket_connectData* op
   int len;
 
   // 1. Create CONNECT packet
-  if ((len = MQTTSNSerialize_connect(scratch_buffer, sizeof(scratch_buffer), options)) == 0)
+  if ((len = MQTTSNSerialize_connect(scratch_buffer, sizeof(scratch_buffer), options)) <= 0)
   {
     printf("Failed to serialize CONNECT packet, return code %d\r\n", len);
     return -1;
   }
 
   // 2. Send CONNECT packet to the MQTTSN Gateway
-  if ((rc = transport_sendPacketBuffer(ctx->gateway_address, ctx->gateway_port, scratch_buffer, len)) != 0)
+  if ((rc
+       = transport_sendPacketBuffer(ctx->gateway_address, ctx->gateway_port, scratch_buffer, len))
+      != 0)
   {
     printf("Failed to send CONNECT packet to the Gateway, return code %d\r\n", rc);
     return rc;
@@ -227,16 +242,14 @@ static int receive_connack()
     {
       printf("Successfully received CONNACK\r\n");
     }
-
-    return rc;
   }
   else
   {
     printf("Failed to receive CONNACK packet\r\n");
-    return -1;
+    rc = -1;
   }
 
-  return 0;
+  return rc;
 }
 
 /*
@@ -248,6 +261,8 @@ static int connect_device(iothub_client_context* ctx)
   int rc;
   int len;
   int retry_attempt = 0;
+  MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
+  options.clientID.cstring = ctx->device_id;
 
   // 1. Open unicast UDP transport
   if ((rc = transport_open()) < 0)
@@ -257,18 +272,21 @@ static int connect_device(iothub_client_context* ctx)
   }
 
   // 2. Attempt connecting to Gateway with some backoff
-  MQTTSNPacket_connectData options = MQTTSNPacket_connectData_initializer;
-  options.clientID.cstring = ctx->device_id;
-
   do
   {
     if ((rc = send_connect(ctx, &options)) != 0)
     {
-      printf("Failed to send CONNECT packet to Gateway for device ID = %s, return code = %d\r\n", ctx->device_id, rc);
+      printf(
+          "Failed to send CONNECT packet to Gateway for device ID = %s, return code = %d\r\n",
+          ctx->device_id,
+          rc);
     }
     else if ((rc = receive_connack()) != 0)
     {
-      printf("Failed to receive CONNACK packet from Gateway for device ID = %s, return code = %d\r\n", ctx->device_id, rc);
+      printf(
+          "Failed to receive CONNACK packet from Gateway for device ID = %s, return code = %d\r\n",
+          ctx->device_id,
+          rc);
     }
 
     if (rc != 0)
@@ -281,7 +299,7 @@ static int connect_device(iothub_client_context* ctx)
 
   } while (rc != 0);
 
-  return 0;
+  return rc;
 }
 
 /*
@@ -301,14 +319,16 @@ static int send_topic_registration(iothub_client_context* ctx, MQTTSNString* top
 
   if ((len = MQTTSNSerialize_register(
            scratch_buffer, sizeof(scratch_buffer), 0, ctx->packet_id, topic_str))
-      == 0)
+      <= 0)
   {
     printf("Failed to serialize REGISTER packet, return code %d\r\n", len);
     return len;
   }
 
   // 2. Send REGISTER packet to the MQTTSN Gateway
-  if ((rc = transport_sendPacketBuffer(ctx->gateway_address, ctx->gateway_port, scratch_buffer, len)) != 0)
+  if ((rc
+       = transport_sendPacketBuffer(ctx->gateway_address, ctx->gateway_port, scratch_buffer, len))
+      != 0)
   {
     printf("Failed to send REGISTER packet to the Gateway, return code %d\r\n", rc);
     return rc;
@@ -368,7 +388,6 @@ static int register_topic(
   int rc;
   int len;
   int retry_attempt = 0;
-
   MQTTSNString topic_str;
   topic_str.cstring = topic_name;
   topic_str.lenstring.len = topic_len;
@@ -377,11 +396,17 @@ static int register_topic(
   {
     if ((rc = send_topic_registration(ctx, &topic_str)) != 0)
     {
-      printf("Failed to send REGISTER packet with Gateway the topic name = %s, return code = %d\r\n", topic_name, rc);
+      printf(
+          "Failed to send REGISTER packet with Gateway the topic name = %s, return code = %d\r\n",
+          topic_name,
+          rc);
     }
     else if ((rc = receive_topic_registration_ack(ctx, topic_id)) != 0)
     {
-      printf("Failed to receive REGACK packet from Gateway for topic name = %s, return code = %d\r\n", topic_name, rc);
+      printf(
+          "Failed to receive REGACK packet from Gateway for topic name = %s, return code = %d\r\n",
+          topic_name,
+          rc);
     }
 
     if (rc != 0)
@@ -429,14 +454,16 @@ static int send_publish(iothub_client_context* ctx, unsigned char* payload, int 
            topic,
            payload,
            payload_size))
-      == 0)
+      <= 0)
   {
     printf("Failed to serialize PUBLISH packet, return code %d\r\n", len);
     return len;
   }
 
   // 2. Send PUBLISH packet to the MQTTSN Gateway
-  if ((rc = transport_sendPacketBuffer(ctx->gateway_address, ctx->gateway_port, scratch_buffer, len)) != 0)
+  if ((rc
+       = transport_sendPacketBuffer(ctx->gateway_address, ctx->gateway_port, scratch_buffer, len))
+      != 0)
   {
     printf(
         "Failed to send PUBLISH packet with packet id = %d, return code %d\r\n",
@@ -521,7 +548,6 @@ static int send_telemetry(iothub_client_context* ctx, unsigned char* payload, in
         payload_size);
     return rc;
   }
-
   // 3. Wait for puback if enabled (QoS 1)
 #ifdef ENABLE_PUBACK
   else if ((rc = receive_puback(ctx, &ctx->packet_id)) != 0)
@@ -601,13 +627,15 @@ static int disconnect_device(iothub_client_context* ctx)
   // 1. Send Disconnect packet to the Gateway
   printf("Disconnecting\r\n");
 
-  if ((len = MQTTSNSerialize_disconnect(scratch_buffer, sizeof(scratch_buffer), 0)) == 0)
+  if ((len = MQTTSNSerialize_disconnect(scratch_buffer, sizeof(scratch_buffer), 0)) <= 0)
   {
     printf("Failed to serialize Disconnect packet, return code %d\r\n", len);
     return -1;
   }
 
-  if ((rc = transport_sendPacketBuffer(ctx->gateway_address, ctx->gateway_port, scratch_buffer, len)) != 0)
+  if ((rc
+       = transport_sendPacketBuffer(ctx->gateway_address, ctx->gateway_port, scratch_buffer, len))
+      != 0)
   {
     printf("Failed to send Disconnect packet to the Gateway, return code %d\r\n", rc);
     return rc;
@@ -634,29 +662,24 @@ static int disconnect_device(iothub_client_context* ctx)
 int main(int argc, char** argv)
 {
   int rc;
-  unsigned short topicid;
-
   iothub_client_context iothub_ctx;
 
   if ((rc = init_client_context(&iothub_ctx)) != 0)
   {
-    return rc;
+    printf("init_client_context failed, return code %d\r\n", rc);
   }
-
-  if ((rc = connect_device(&iothub_ctx)) != 0)
+  else if ((rc = connect_device(&iothub_ctx)) != 0)
   {
-    return rc;
+    printf("connect_device failed, return code %d\r\n", rc);
   }
-
-  if ((rc = send_sample_telemetry_messages(&iothub_ctx)) != 0)
+  else if ((rc = send_sample_telemetry_messages(&iothub_ctx)) != 0)
   {
-    return rc;
+    printf("send_sample_telemetry_messages failed, return code %d\r\n", rc);
   }
-
-  if ((rc = disconnect_device(&iothub_ctx)) != 0)
+  else if ((rc = disconnect_device(&iothub_ctx)) != 0)
   {
-    return rc;
+    printf("disconnect_device failed, return code %d\r\n", rc);
   }
 
-  return 0;
+  return rc;
 }
