@@ -28,8 +28,8 @@
 
 #define DEFAULT_GATEWAY_ADDRESS "127.0.0.1"
 #define DEFAULT_GATEWAY_PORT "10000"
-#define TELEMETRY_SEND_INTERVAL 1 // seconds
-#define NUMBER_OF_MESSAGES 5
+#define TELEMETRY_SEND_INTERVAL_SECONDS 1 
+#define NUMBER_OF_MESSAGES 100
 #define TELEMETRY_PAYLOAD \
   "{\"d\":{\"myName\":\"IoT mbed\",\"accelX\":12,\"accelY\":4,\"accelZ\":12,\"temp\":18}}"
 
@@ -51,7 +51,7 @@ typedef struct iothub_client_context_tag
   unsigned short telemetry_topic_id;
   az_iot_hub_client client;
   short packet_id;
-} iothub_client_context;
+} IOTHUB_CLIENT_CONTEXT;
 
 static void sleep_seconds(uint32_t seconds)
 {
@@ -160,11 +160,11 @@ static int read_configuration_and_init_client(
 /*
  * Read the Environment Variables and initialize the az_iot_hub_client
  */
-static int init_client_context(iothub_client_context* ctx)
+static int init_client_context(IOTHUB_CLIENT_CONTEXT* ctx)
 {
   int rc;
 
-  memset((void*)ctx, 0, sizeof(iothub_client_context));
+  memset((void*)ctx, 0, sizeof(IOTHUB_CLIENT_CONTEXT));
 
   if (rc = read_configuration_and_init_client(
           &ctx->client,
@@ -187,7 +187,7 @@ static int init_client_context(iothub_client_context* ctx)
  * Next 10 attempts: retry after every 1 minute
  * After 20 attempts: retry every 10 minutes
  */
-int get_connection_timeout(int attempt_number)
+int get_connection_timeout_seconds(int attempt_number)
 {
   return (attempt_number < 10) ? 3 : (attempt_number < 20) ? 60 : 600;
 }
@@ -196,7 +196,7 @@ int get_connection_timeout(int attempt_number)
  * 1. Create CONNECT packet
  * 2. Send CONNECT packet to the MQTTSN Gateway
  */
-static int send_connect(iothub_client_context* ctx, MQTTSNPacket_connectData* options)
+static int send_connect(IOTHUB_CLIENT_CONTEXT* ctx, MQTTSNPacket_connectData* options)
 {
   int rc;
   int len;
@@ -253,7 +253,7 @@ static int receive_connack()
  * 1. Open transport
  * 2. Attempt connecting to Gateway with some backoff
  */
-static int connect_device(iothub_client_context* ctx)
+static int connect_device(IOTHUB_CLIENT_CONTEXT* ctx)
 {
   int rc;
   int len;
@@ -288,10 +288,10 @@ static int connect_device(iothub_client_context* ctx)
 
     if (rc != 0)
     {
-      int timeout = get_connection_timeout(++retry_attempt);
-      printf("Retry attempt number %d waiting %d\n", retry_attempt, timeout);
+      int timeout_seconds = get_connection_timeout_seconds(++retry_attempt);
+      printf("Retry attempt number %d waiting %d\n", retry_attempt, timeout_seconds);
 
-      sleep_seconds(timeout);
+      sleep_seconds(timeout_seconds);
     }
 
   } while (rc != 0);
@@ -303,7 +303,7 @@ static int connect_device(iothub_client_context* ctx)
  * 1. Create REGISTER packet
  * 2. Send REGISTER packet to the MQTTSN Gateway
  */
-static int send_topic_registration(iothub_client_context* ctx, MQTTSNString* topic_str)
+static int send_topic_registration(IOTHUB_CLIENT_CONTEXT* ctx, MQTTSNString* topic_str)
 {
   int rc;
   int len;
@@ -338,7 +338,7 @@ static int send_topic_registration(iothub_client_context* ctx, MQTTSNString* top
  * 1. Wait for REGACK packet from the MQTTSN Gateway
  * 2. Save received topic ID
  */
-static int receive_topic_registration_ack(iothub_client_context* ctx, unsigned short* topic_id)
+static int receive_topic_registration_ack(IOTHUB_CLIENT_CONTEXT* ctx, unsigned short* topic_id)
 {
   int len;
 
@@ -377,7 +377,7 @@ static int receive_topic_registration_ack(iothub_client_context* ctx, unsigned s
  * 3. Retry with backoff if fail to register
  */
 static int register_topic(
-    iothub_client_context* ctx,
+    IOTHUB_CLIENT_CONTEXT* ctx,
     char* topic_name,
     int topic_len,
     unsigned short* topic_id)
@@ -408,10 +408,10 @@ static int register_topic(
 
     if (rc != 0)
     {
-      int timeout = get_connection_timeout(++retry_attempt);
-      printf("Retry attempt number %d waiting %d\n", retry_attempt, timeout);
+      int timeout_seconds = get_connection_timeout_seconds(++retry_attempt);
+      printf("Retry attempt number %d waiting %d\n", retry_attempt, timeout_seconds);
 
-      sleep_seconds(timeout);
+      sleep_seconds(timeout_seconds);
     }
 
   } while (rc != 0);
@@ -423,7 +423,7 @@ static int register_topic(
  * 1. Create PUBLISH packet
  * 2. Send PUBLISH packet to the MQTTSN Gateway
  */
-static int send_publish(iothub_client_context* ctx, unsigned char* payload, int payload_size)
+static int send_publish(IOTHUB_CLIENT_CONTEXT* ctx, unsigned char* payload, int payload_size)
 {
   int rc;
   int len;
@@ -480,7 +480,7 @@ static int send_publish(iothub_client_context* ctx, unsigned char* payload, int 
  * 1. Wait for PUBACK packet from the MQTTSN Gateway
  * 2. Validate packet ID
  */
-static int receive_puback(iothub_client_context* ctx, unsigned short* packet_id)
+static int receive_puback(IOTHUB_CLIENT_CONTEXT* ctx, unsigned short* packet_id)
 {
   unsigned short packet_id_received;
 
@@ -528,7 +528,7 @@ static int receive_puback(iothub_client_context* ctx, unsigned short* packet_id)
  * 2. Publish message
  * 3. Wait for puback if enabled (QoS 1)
  */
-static int send_telemetry(iothub_client_context* ctx, unsigned char* payload, int payload_size)
+static int send_telemetry(IOTHUB_CLIENT_CONTEXT* ctx, unsigned char* payload, int payload_size)
 {
   int rc;
   int len;
@@ -565,11 +565,12 @@ static int send_telemetry(iothub_client_context* ctx, unsigned char* payload, in
  * 2. Register the topic with the Gateway to get topic ID
  * 3. Send sample telemetry messages
  */
-static int send_sample_telemetry_messages(iothub_client_context* ctx)
+static int send_sample_telemetry_messages(IOTHUB_CLIENT_CONTEXT* ctx)
 {
   int rc;
   int len;
   int retry_attempt = 0;
+  int index = 0;
 
   // 1. Get telemetry topic name from the Azure IoT Hub
   if (az_failed(
@@ -588,17 +589,17 @@ static int send_sample_telemetry_messages(iothub_client_context* ctx)
   }
 
   // 3. Send sample telemetry messages
-  for (int i = 0; i < NUMBER_OF_MESSAGES; ++i)
+  while(index < NUMBER_OF_MESSAGES)
   {
-    printf("Sending Message %d\r\n", i + 1);
+    printf("Sending Message %d\r\n", index + 1);
 
     // Attempt sending messages with some backoff
     if ((rc = send_telemetry(ctx, TELEMETRY_PAYLOAD, sizeof(TELEMETRY_PAYLOAD)) != 0))
     {
-      int timeout = get_connection_timeout(++retry_attempt);
-      printf("Retry attempt number %d waiting %d\n", retry_attempt, timeout);
+      int timeout_seconds = get_connection_timeout_seconds(++retry_attempt);
+      printf("Retry attempt number %d waiting %d\n", retry_attempt, timeout_seconds);
 
-      sleep_seconds(timeout);
+      sleep_seconds(timeout_seconds);
 
       continue;
     }
@@ -606,7 +607,8 @@ static int send_sample_telemetry_messages(iothub_client_context* ctx)
     retry_attempt = 0;
 
     // Publish messages at an interval
-    sleep_seconds(TELEMETRY_SEND_INTERVAL);
+    sleep_seconds(TELEMETRY_SEND_INTERVAL_SECONDS);
+    index++;
   }
 
   return 0;
@@ -616,7 +618,7 @@ static int send_sample_telemetry_messages(iothub_client_context* ctx)
  * 1. Send Disconnect packet to the Gateway
  * 2. Close the transport
  */
-static int disconnect_device(iothub_client_context* ctx)
+static int disconnect_device(IOTHUB_CLIENT_CONTEXT* ctx)
 {
   int rc;
   int len;
@@ -659,7 +661,7 @@ static int disconnect_device(iothub_client_context* ctx)
 int main(int argc, char** argv)
 {
   int rc;
-  iothub_client_context iothub_ctx;
+  IOTHUB_CLIENT_CONTEXT iothub_ctx;
 
   if ((rc = init_client_context(&iothub_ctx)) != 0)
   {
