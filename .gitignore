@@ -1,0 +1,5 @@
+# Ignore config files
+client_build/
+gateway_build/
+
+.vscode
