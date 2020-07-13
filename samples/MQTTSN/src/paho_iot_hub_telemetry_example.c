@@ -28,8 +28,8 @@
 
 #define DEFAULT_GATEWAY_ADDRESS "127.0.0.1"
 #define DEFAULT_GATEWAY_PORT "10000"
-#define TELEMETRY_SEND_INTERVAL_SECONDS 1 
-#define NUMBER_OF_MESSAGES 100
+#define TELEMETRY_SEND_INTERVAL_SECONDS 1
+#define NUMBER_OF_MESSAGES 1000
 #define TELEMETRY_PAYLOAD \
   "{\"d\":{\"myName\":\"IoT mbed\",\"accelX\":12,\"accelY\":4,\"accelZ\":12,\"temp\":18}}"
 
@@ -589,7 +589,7 @@ static int send_sample_telemetry_messages(IOTHUB_CLIENT_CONTEXT* ctx)
   }
 
   // 3. Send sample telemetry messages
-  while(index < NUMBER_OF_MESSAGES)
+  while (index < NUMBER_OF_MESSAGES)
   {
     printf("Sending Message %d\r\n", index + 1);
 

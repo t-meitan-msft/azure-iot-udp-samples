@@ -61,6 +61,10 @@
 #include <sys/ioctl.h>
 #endif
 
+#ifndef DEFAULT_RECV_TIMEOUT
+#define DEFAULT_RECV_TIMEOUT 15
+#endif /* DEFAULT_RECV_TIMEOUT */
+
 /**
 This simple low-level implementation assumes a single connection for a single thread. Thus, a static
 variable is used for that connection.
@@ -117,8 +121,29 @@ int transport_sendPacketBuffer(char* host, int port, unsigned char* buf, int buf
 
 int transport_getdata(unsigned char* buf, int count)
 {
-  int rc = recvfrom(mysock, buf, count, 0, NULL, NULL);
-  // printf("received %d bytes count %d\n", rc, (int)count);
+  fd_set fds;
+  int n;
+  struct timeval tv;
+  int rc = -1;
+
+  // Set up the file descriptor set
+  FD_ZERO(&fds);
+  FD_SET(mysock, &fds);
+
+  // Set up the struct timeval for the timeout
+  tv.tv_sec = DEFAULT_RECV_TIMEOUT;
+  tv.tv_usec = 0;
+
+  if ((rc = select  (mysock + 1, &fds, NULL, NULL, &tv)) <= 0)
+  {
+    return -1;
+  }
+
+  if (FD_ISSET(mysock, &fds))
+  {
+    rc = recvfrom(mysock, buf, count, 0, NULL, NULL);
+  }
+
   return rc;
 }
 
