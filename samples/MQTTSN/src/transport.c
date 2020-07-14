@@ -122,7 +122,6 @@ int transport_sendPacketBuffer(char* host, int port, unsigned char* buf, int buf
 int transport_getdata(unsigned char* buf, int count)
 {
   fd_set fds;
-  int n;
   struct timeval tv;
   int rc = -1;
 
@@ -134,7 +133,7 @@ int transport_getdata(unsigned char* buf, int count)
   tv.tv_sec = DEFAULT_RECV_TIMEOUT;
   tv.tv_usec = 0;
 
-  if ((rc = select  (mysock + 1, &fds, NULL, NULL, &tv)) <= 0)
+  if ((rc = select(mysock + 1, &fds, NULL, NULL, &tv)) <= 0)
   {
     return -1;
   }
